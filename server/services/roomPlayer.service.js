@@ -9,8 +9,9 @@
  *    transaksi booking (buka/tutup/batal) -> atomik dgn booking.
  *  - flushOutbox(): worker latar, kirim perintah pending ke 154 dgn retry.
  *  - reconcileOnce(): jaring pengaman - pastikan room yg PUNYA transaksi
- *    aktif non-test di gr-pos memang is_active='1' di 154. TIDAK PERNAH
- *    mematikan room (room tak dikenal mungkin milik sistem lama).
+ *    aktif di gr-pos (termasuk sesi Mode Test / tes fisik) memang
+ *    is_active='1' di 154. TIDAK PERNAH mematikan room (room tak dikenal
+ *    mungkin milik sistem lama).
  *  - assertRoomAvailableOnLegacy(): tolak buka room yg sudah is_active='1'
  *    di 154 (dipegang sistem lama).
  */
@@ -93,11 +94,11 @@ async function flushOutbox() {
     );
     for (const row of rows) {
       // Stale guard: perintah "on" yang sudah lama - re-validasi masih perlu?
-      if (row.desired_state === 'on' && ['buka_kamar', 'reconcile'].includes(row.reason)) {
+      if (row.desired_state === 'on' && ['buka_kamar', 'reconcile', 'test_open'].includes(row.reason)) {
         const ageMin = (Date.now() - new Date(row.created_at).getTime()) / 60000;
         if (ageMin > STALE_MINUTES) {
           const [act] = await pool.query(
-            "SELECT 1 FROM web_tr_trans WHERE room_id = ? AND status = 'active' AND is_test = 0 LIMIT 1",
+            "SELECT 1 FROM web_tr_trans WHERE room_id = ? AND status = 'active' LIMIT 1",
             [row.room_id]
           );
           if (!act.length) {
@@ -145,9 +146,9 @@ async function reconcileOnce() {
   if (reconciling || !legacyEnabled()) return;
   reconciling = true;
   try {
-    // --- Arah ON ---
+    // --- Arah ON --- (termasuk sesi Mode Test: tes fisik menyalakan player)
     const [active] = await pool.query(
-      "SELECT DISTINCT room_id FROM web_tr_trans WHERE status = 'active' AND is_test = 0"
+      "SELECT DISTINCT room_id FROM web_tr_trans WHERE status = 'active'"
     );
     for (const { room_id } of active) {
       const [leg] = await legacyPool.query('SELECT is_active FROM m_room WHERE room_id = ?', [room_id]);
@@ -165,10 +166,10 @@ async function reconcileOnce() {
       const [stray] = await legacyPool.query("SELECT room_id FROM m_room WHERE is_active = '1'");
       for (const { room_id } of stray) {
         const [act] = await pool.query(
-          "SELECT 1 FROM web_tr_trans WHERE room_id = ? AND status = 'active' AND is_test = 0 LIMIT 1",
+          "SELECT 1 FROM web_tr_trans WHERE room_id = ? AND status = 'active' LIMIT 1",
           [room_id]
         );
-        if (act.length) continue; // masih aktif di gr-pos - jangan sentuh
+        if (act.length) continue; // masih aktif di gr-pos (termasuk sesi tes) - jangan sentuh
         // gr-pos harus PERNAH menutup room ini (trans terakhir closed/cancelled).
         // Kalau gr-pos tak punya riwayat room ini -> kemungkinan milik aplikasi
         // lama, JANGAN matikan.

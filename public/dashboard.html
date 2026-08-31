@@ -65,12 +65,13 @@
           if (cls === 'occupied') {
             const at = r.active_trans;
             if (at.is_test) {
-              body += `<div class="lock-note" style="color:#d97706;font-weight:600">🧪 MODE TEST — bukan tamu sungguhan</div>`;
+              body += `<div class="lock-note" style="color:#d97706;font-weight:600">🧪 TES ROOM — player nyala, cek lagu/mic</div>`;
             } else if (at.rate_mode === 'comp') {
               body += `<div class="lock-note" style="color:#a855f7;font-weight:600">👑 VIP/VVIP — tanpa minimum F&B</div>`;
             }
             const cd = at.expires_at ? formatCountdown(at.expires_at) : { text: formatDuration(at.start_time), overtime: false };
             body += `<div class="timer${cd.overtime ? ' overtime' : ''}" data-expires="${at.expires_at || ''}">${cd.text}</div>`;
+            if (at.is_test) body += `<div class="guests" style="color:#d97706">player auto-mati</div>`;
             body += `<div class="guests">${icon('users', 13)} ${at.person || 0} tamu · ${at.cust_name}</div>`;
             // Peringatan visual 10 menit terakhir: kasir pastikan semua bill
             // LUNAS, security cek kondisi ruangan sebelum tamu pergi.
@@ -83,7 +84,7 @@
                 body += `<div class="lock-note ending-note" style="color:var(--red)">⏰ Waktu habis — checkout / perpanjangan</div>`;
               }
             }
-            body += `<button class="cta">${at.is_test ? 'Kelola (Test)' : 'Kelola Order'}</button>`;
+            body += `<button class="cta">${at.is_test ? 'Kelola Tes' : 'Kelola Order'}</button>`;
             // Notifikasi sekali saat waktu sebuah kamar habis.
             if (!at.is_test && at.expires_at && new Date(at.expires_at) <= new Date() && !timeUpShown.has(at.trans_id)) {
               timeUpShown.add(at.trans_id);

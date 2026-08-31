@@ -4,7 +4,7 @@ const { requireAuth, requireRole } = require('../middleware/auth');
 const { AppError } = require('../middleware/errorHandler');
 const roomPlayer = require('../services/roomPlayer.service');
 const legacyRoomState = require('../services/legacyRoomState.service');
-const { allottedMs, getWindowForTime, CREDIT_HOURS_PER_THRESHOLD } = require('../services/threshold.service');
+const { allottedMs, getWindowForTime, CREDIT_HOURS_PER_THRESHOLD, TEST_MODE_MINUTES } = require('../services/threshold.service');
 
 const router = express.Router();
 const SOFT_LOCK_TTL_SECONDS = Number(process.env.SOFT_LOCK_TTL_SECONDS || 120);
@@ -66,10 +66,11 @@ router.get('/', async (req, res, next) => {
           rateMode: t.rate_mode,
           compHours: t.comp_hours,
         });
-        // Mode Test: threshold_amount = 0, tidak ada alokasi waktu -> null.
+        // Mode Test (tes fisik room): player nyala, auto-mati TEST_MODE_MINUTES
+        // sejak start_time -> hitung mundur dari situ.
         // COMP (VIP/VVIP): expires_at dihitung dari comp_hours.
         const expiresAt = t.is_test
-          ? null
+          ? new Date(new Date(t.start_time).getTime() + TEST_MODE_MINUTES * 60000).toISOString()
           : new Date(new Date(t.start_time).getTime() + totalMs).toISOString();
         return [
           t.room_id,
@@ -113,6 +114,7 @@ router.get('/', async (req, res, next) => {
       threshold_amount: thByType[r.room_type] ?? null,
       threshold_window: windowNow,
       hours_per_threshold: CREDIT_HOURS_PER_THRESHOLD,
+      test_mode_minutes: TEST_MODE_MINUTES,
       is_maintenance: Boolean(maintByRoom[r.room_id] !== undefined),
       maintenance_reason: maintByRoom[r.room_id] || null,
       active_trans: transByRoom[r.room_id] || null,

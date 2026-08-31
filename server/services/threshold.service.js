@@ -46,6 +46,10 @@ const CREDIT_HOURS_PER_THRESHOLD = Number(process.env.CREDIT_HOURS_PER_THRESHOLD
 // mengisi jam sendiri. Keduanya bisa diperpanjang lewat "+ Add Time".
 const COMP_DEFAULT_HOURS = Number(process.env.COMP_DEFAULT_HOURS || 12);
 
+// Lama sesi Mode Test (tes fisik room) sebelum player dimatikan otomatis
+// oleh worker testMode. Staf bisa mengakhiri lebih cepat lewat "Selesai Tes".
+const TEST_MODE_MINUTES = Number(process.env.TEST_MODE_MINUTES || 15);
+
 /**
  * @param {object} p
  * @param {number} p.netFnb - total FnB setelah diskon member
@@ -69,5 +73,5 @@ function allottedMs({ netFnb, thresholdAmount, extraHours = 0, rateMode = 'thres
 
 module.exports = {
   getWindowForTime, getThresholdAmount, allottedMs,
-  CREDIT_HOURS_PER_THRESHOLD, COMP_DEFAULT_HOURS,
+  CREDIT_HOURS_PER_THRESHOLD, COMP_DEFAULT_HOURS, TEST_MODE_MINUTES,
 };

@@ -228,9 +228,13 @@ layar checkout dengan pilihan metode bayar):
   login.
 - **Admin/Supervisor**: bisa set kamar Maintenance/Rusak, dan Batalkan
   transaksi kalau perlu.
-- **Mode Test** (kasir/supervisor/admin): centang di layar Sesi Baru untuk
-  mencoba kamar ~15 menit tanpa efek samping - player sistem lama TIDAK
-  disentuh, threshold & pembayaran dilewati, tidak ada struk tercetak.
+- **Mode Test = tes fisik room** (kasir/waiter/supervisor/admin): centang di
+  layar Sesi Baru. Room dibuka & **player di sistem lama (154) DINYALAKAN**
+  supaya staf bisa masuk mencoba lagu & mic sebelum tamu datang. Threshold &
+  pembayaran dilewati, tidak ada struk/tiket/stok, tidak masuk omzet. Player
+  dimatikan saat "Selesai Tes" di layar Detail Ruangan, atau otomatis setelah
+  `TEST_MODE_MINUTES` menit (default 15). Room yang sedang dites tidak bisa
+  langsung dibooking - akhiri tesnya dulu.
 - **VIP / VVIP** (di layar Sesi Baru, pilihan "Tarif Kamar"): buka kamar
   TANPA minimum F&B. Wajib password admin/supervisor. Sesi tetap nyata
   (player nyala, struk & tiket tercetak, stok bergerak, tagihan akhir

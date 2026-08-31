@@ -32,10 +32,10 @@
             <label class="field-label">Jumlah Orang</label>
             <input class="field" id="person" type="number" min="0" value="0" />
             <label class="field-label" id="testModeWrap" style="display:none;margin-top:10px">
-              <input type="checkbox" id="isTestMode" /> Mode Test
+              <input type="checkbox" id="isTestMode" /> Mode Test — cek lagu &amp; mic fisik
             </label>
             <div id="testModeNote" style="display:none;font-size:11px;color:#d97706;margin-top:4px">
-              Mode Test aktif — kamar TIDAK tercatat terisi di status kamar asli (aman dari bentrok dengan sistem lama), threshold &amp; pembayaran dilewati, dan tidak ada struk yang tercetak.
+              Tes fisik room: <b>player DINYALAKAN</b> supaya bisa dicoba lagu &amp; mic. Tanpa threshold, tanpa struk, tanpa stok, tidak masuk omzet. Player mati otomatis setelah <b id="testMinsNote">15</b> menit — atau tekan "Selesai Tes" di layar berikutnya.
             </div>
 
             <label class="field-label" id="rateModeWrap" style="display:none;margin-top:10px">Tarif Kamar</label>
@@ -138,10 +138,10 @@
       if (mode === 'new') {
         document.getElementById('sessionForm').style.display = 'block';
         document.getElementById('cartTitle').textContent = 'Sesi Baru';
-        // Mode Test: kasir/supervisor/admin (lihat TEST_MODE_ROLES di
-        // trans.routes.js). Kasir memang perlu mencoba room ~15 menit sendiri.
+        // Mode Test = tes fisik room (player dinyalakan). kasir/waiter/
+        // supervisor/admin - lihat TEST_MODE_ROLES di trans.routes.js.
         const currentUser = getUser();
-        if (currentUser && ['admin', 'supervisor', 'kasir'].includes(currentUser.role)) {
+        if (currentUser && ['admin', 'supervisor', 'kasir', 'waiter'].includes(currentUser.role)) {
           document.getElementById('testModeWrap').style.display = 'block';
           document.getElementById('isTestMode').addEventListener('change', (e) => {
             document.getElementById('testModeNote').style.display = e.target.checked ? 'block' : 'none';
@@ -167,6 +167,10 @@
           roomThreshold = room.threshold_amount;
           hoursPerThreshold = room.hours_per_threshold || 2;
           thresholdWindow = room.threshold_window;
+          if (room.test_mode_minutes) {
+            const n = document.getElementById('testMinsNote');
+            if (n) n.textContent = room.test_mode_minutes;
+          }
         }
         document.getElementById('roomPill').style.display = 'inline-flex';
         document.getElementById('roomPillText').textContent = `${room ? room.room_name : 'Room ' + roomId} (Kosong)`;

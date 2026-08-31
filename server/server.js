@@ -25,6 +25,7 @@ const roomPlayer = require('./services/roomPlayer.service');
 const masterSync = require('./services/masterSync.service');
 const legacyRoomState = require('./services/legacyRoomState.service');
 const eodScheduler = require('./services/eodScheduler');
+const testMode = require('./services/testMode.service');
 
 const app = express();
 
@@ -85,6 +86,11 @@ const server = app.listen(PORT, () => {
 
   // Scheduler Tutup Hari otomatis (independen dari sync 154).
   eodScheduler.start(timers);
+
+  // Auto-selesai sesi Mode Test (tes fisik room) yang lewat batas waktu ->
+  // matikan player-nya. Jalan walau sync 154 off (enqueue lokal saja).
+  setTimeout(testMode.expireStale, 20000);
+  timers.push(setInterval(testMode.expireStale, 60000));
 });
 
 // --- Shutdown rapi (dipakai NSSM/Windows Service saat stop/restart) ---

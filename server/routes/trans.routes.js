@@ -5,7 +5,7 @@ const { pool, withTransaction } = require('../config/db');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { AppError } = require('../middleware/errorHandler');
 const { generateTransId } = require('../utils/idGenerator');
-const { getWindowForTime, getThresholdAmount, allottedMs, CREDIT_HOURS_PER_THRESHOLD, COMP_DEFAULT_HOURS } = require('../services/threshold.service');
+const { getWindowForTime, getThresholdAmount, allottedMs, CREDIT_HOURS_PER_THRESHOLD, COMP_DEFAULT_HOURS, TEST_MODE_MINUTES } = require('../services/threshold.service');
 const { queuePrint } = require('../services/printQueue.service');
 const roomPlayer = require('../services/roomPlayer.service');
 const legacyRoomState = require('../services/legacyRoomState.service');
@@ -38,16 +38,18 @@ router.use(requireAuth);
 // migration 003_room_player_outbox.sql. Kolom m_room.status TIDAK dipakai.
 
 // =====================================================================
-// MODE TEST (27 Agustus 2026) - lihat desain-teknis-room-billing.md.
-// Tujuan: kasir/admin bisa buka & coba-coba kamar TANPA memicu efek
-// samping ke sistem lama. Transaksi bertanda is_test=1 karena itu:
-//   - TIDAK PERNAH mengantre perintah player ke server lama (buka/tutup/batal)
+// MODE TEST = TES FISIK ROOM (direvisi 31 Agustus 2026).
+// Tujuan: sebelum tamu datang, staf masuk ke room untuk cek lagu & mic
+// benar-benar bunyi. Transaksi bertanda is_test=1:
+//   - MENYALAKAN player room di server lama (154) - inti tes fisik
 //   - melewati validasi threshold FnB/pembayaran
 //   - TIDAK memicu print job apa pun (slip gudang/billing/tagihan/tiket dapur)
-// Hanya role di TEST_MODE_ROLES yang boleh mengaktifkannya. Kasir DImasukkan
-// (31 Agustus 2026): kasir memang perlu mencoba room ~15 menit di terminalnya
-// sendiri tanpa harus memanggil SPV/admin.
-const TEST_MODE_ROLES = ['kasir', 'supervisor', 'admin'];
+//   - TIDAK menggerakkan stok, TIDAK masuk omzet/laporan Tutup Hari
+//   - player DImatikan lagi saat "Selesai Tes" (tutup-kamar) atau otomatis
+//     oleh worker testMode setelah TEST_MODE_MINUTES (services/testMode.service.js)
+// Boleh dipakai kasir & waiter (tanpa otorisasi SPV) - merekalah yang keliling
+// cek room tiap sebelum buka.
+const TEST_MODE_ROLES = ['kasir', 'waiter', 'supervisor', 'admin'];
 
 // =====================================================================
 // COMP ROOM - VIP / VVIP (31 Agustus 2026) - lihat migration 010_comp_room.sql.
@@ -211,7 +213,7 @@ router.post('/buka-kamar', async (req, res, next) => {
       throw new AppError(400, 'Tidak bisa memakai Mode Test dan VIP/VVIP sekaligus.');
     }
     if (isTest && !TEST_MODE_ROLES.includes(req.user.role)) {
-      throw new AppError(403, 'Mode Test hanya bisa dipakai oleh kasir/supervisor/admin.');
+      throw new AppError(403, 'Mode Test (tes fisik room) hanya untuk kasir/waiter/supervisor/admin.');
     }
 
     const result = await withTransaction(async (conn) => {
@@ -239,22 +241,28 @@ router.post('/buka-kamar', async (req, res, next) => {
       }
 
       const [activeRows] = await conn.query(
-        "SELECT trans_id FROM web_tr_trans WHERE room_id = ? AND status = 'active'",
+        "SELECT trans_id, is_test FROM web_tr_trans WHERE room_id = ? AND status = 'active'",
         [room_id]
       );
       if (activeRows.length) {
-        throw new AppError(409, `Kamar ${room.room_name} sedang terisi (transaksi ${activeRows[0].trans_id}).`);
+        throw new AppError(
+          409,
+          activeRows[0].is_test
+            ? `Kamar ${room.room_name} sedang DITES (cek lagu/mic). Tekan "Selesai Tes" dulu sebelum menerima tamu.`
+            : `Kamar ${room.room_name} sedang terisi (transaksi ${activeRows[0].trans_id}).`
+        );
       }
 
       // Jangan buka room yang sedang AKTIF di sistem lama (154) - hindari 2
-      // sistem memperebutkan room yang sama. No-op kalau ROOM_PLAYER_SYNC off
-      // atau untuk Mode Test.
+      // sistem memperebutkan room yang sama. No-op kalau ROOM_PLAYER_SYNC off.
+      // Berlaku JUGA untuk Mode Test: tes fisik room kini menyalakan player di
+      // 154, jadi jangan menes room yang sedang dipakai tamu di sistem lama.
       //
       // Local-first: cache status 154 (web_legacy_room_state, di-refresh
       // worker read-only tiap ~15s). Cache SEGAR & bilang menyala -> tolak
       // tanpa menyentuh 154 (hemat beban 154 saat peak). Cache basi/absen ->
       // fallback query langsung ke 154 (fail-open kalau 154 tak terhubung).
-      if (!isTest) {
+      {
         const ls = await legacyRoomState.check(conn, room_id);
         if (ls.known && ls.is_active && !ls.stale) {
           throw new AppError(
@@ -370,12 +378,15 @@ router.post('/buka-kamar', async (req, res, next) => {
           });
 
       // Antre perintah NYALAKAN player room ke server lama (154). Atomik dgn
-      // booking (pakai `conn`). Mode Test tidak menyentuh sistem lama.
-      if (!isTest) {
-        await roomPlayer.enqueue(conn, {
-          roomId: room_id, desiredState: 'on', reason: 'buka_kamar', transId, userId: req.user.user_id,
-        });
-      }
+      // booking (pakai `conn`). Mode Test IKUT menyalakan player - itu inti tes
+      // fisik: staf masuk room, cek lagu & mic. Player dimatikan lagi saat
+      // "Selesai Tes" (tutup-kamar) atau otomatis oleh worker testMode setelah
+      // TEST_MODE_MINUTES.
+      await roomPlayer.enqueue(conn, {
+        roomId: room_id, desiredState: 'on',
+        reason: isTest ? 'test_open' : 'buka_kamar',
+        transId, userId: req.user.user_id,
+      });
       await conn.query('DELETE FROM web_room_soft_lock WHERE room_id = ?', [room_id]);
 
       await conn.query(
@@ -448,6 +459,8 @@ router.post('/buka-kamar', async (req, res, next) => {
       const response = {
         trans_id: transId, room_name: room.room_name, print_jobs: printJobs, is_test: isTest,
         rate_mode: isComp ? 'comp' : 'threshold', comp_hours: compHours,
+        test_expires_at: isTest ? new Date(Date.now() + TEST_MODE_MINUTES * 60000).toISOString() : null,
+        test_minutes: isTest ? TEST_MODE_MINUTES : null,
         stock_warnings: stockWarnings,
         promo_disc_fnb: promoDiscFnb, promos_applied: promoEval.applied,
       };
@@ -940,13 +953,14 @@ router.post('/:id/tutup-kamar', async (req, res, next) => {
          WHERE trans_id = ?`,
         [req.user.user_id, req.terminalId, finalPaymentMethod, transId]
       );
-      // Antre perintah MATIKAN player room ke server lama (154). Mode Test
-      // tidak pernah menyalakan, jadi tidak perlu mematikan.
-      if (!trans.is_test) {
-        await roomPlayer.enqueue(conn, {
-          roomId: trans.room_id, desiredState: 'off', reason: 'tutup_kamar', transId, userId: req.user.user_id,
-        });
-      }
+      // Antre perintah MATIKAN player room ke server lama (154). Berlaku juga
+      // utk Mode Test - "Selesai Tes" harus mematikan player yang tadi
+      // dinyalakan saat mulai tes.
+      await roomPlayer.enqueue(conn, {
+        roomId: trans.room_id, desiredState: 'off',
+        reason: trans.is_test ? 'test_close' : 'tutup_kamar',
+        transId, userId: req.user.user_id,
+      });
 
       await conn.query(
         `INSERT INTO web_tr_trans_history (trans_id, action, user_id, terminal_id, detail)
@@ -1028,11 +1042,12 @@ router.post('/:id/batal', requireRole('admin', 'supervisor'), async (req, res, n
         );
       }
 
-      if (!trans.is_test) {
-        await roomPlayer.enqueue(conn, {
-          roomId: trans.room_id, desiredState: 'off', reason: 'batal', transId, userId: req.user.user_id,
-        });
-      }
+      // Matikan player - juga utk Mode Test (tes fisik menyalakannya).
+      await roomPlayer.enqueue(conn, {
+        roomId: trans.room_id, desiredState: 'off',
+        reason: trans.is_test ? 'test_close' : 'batal',
+        transId, userId: req.user.user_id,
+      });
       await conn.query(
         `INSERT INTO web_tr_trans_history (trans_id, action, user_id, terminal_id, detail)
          VALUES (?, 'batal', ?, ?, '{}')`,
@@ -1079,7 +1094,15 @@ router.get('/:id', async (req, res, next) => {
           rate_mode: trans.rate_mode,
           comp_hours: trans.comp_hours == null ? null : Number(trans.comp_hours),
         };
-    res.json({ trans, details, extra_hours: extraHours, time_credit, promos_applied: promosApplied });
+    // Mode Test = tes fisik room: player nyala, auto-mati TEST_MODE_MINUTES
+    // sejak start_time (atau saat staf tekan "Selesai Tes").
+    const test_session = trans.is_test
+      ? {
+          minutes: TEST_MODE_MINUTES,
+          expires_at: new Date(new Date(trans.start_time).getTime() + TEST_MODE_MINUTES * 60000).toISOString(),
+        }
+      : null;
+    res.json({ trans, details, extra_hours: extraHours, time_credit, test_session, promos_applied: promosApplied });
   } catch (err) {
     next(err);
   }

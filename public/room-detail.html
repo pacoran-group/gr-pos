@@ -17,7 +17,7 @@
         <div class="tag-row">
           <span class="pill pill-purple" id="guestPill">-</span>
           <span class="pill pill-cyan" id="typePill">-</span>
-          <span class="pill" id="testPill" style="display:none;background:#d97706;color:#fff">🧪 MODE TEST</span>
+          <span class="pill" id="testPill" style="display:none;background:#d97706;color:#fff">🧪 TES ROOM · player nyala</span>
           <span class="pill" id="compPill" style="display:none;background:#7c3aed;color:#fff">👑 VIP/VVIP</span>
         </div>
         <div style="font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.04em" id="timerLabel">Sisa Waktu</div>
@@ -75,13 +75,15 @@
     const transId = new URLSearchParams(location.search).get('id');
     let transData = null;
     let timeCredit = null; // { expires_at, allotted_hours, ... } dari server
+    let testSession = null; // { expires_at, minutes } utk Mode Test (tes fisik room)
     let products = [];
     let currentDetails = []; // baris web_tr_trans_details terakhir yang dimuat (utk modal Tukar Item)
 
     async function load() {
-      const { trans, details, extra_hours, time_credit, promos_applied } = await Api.getTrans(transId);
+      const { trans, details, extra_hours, time_credit, test_session, promos_applied } = await Api.getTrans(transId);
       transData = trans;
       timeCredit = time_credit;
+      testSession = test_session;
       currentDetails = details;
       document.getElementById('roomCodeBig').textContent = `Room ${trans.room_id}`;
       document.getElementById('guestPill').textContent = `${trans.person || 0} tamu`;
@@ -90,10 +92,25 @@
       const isComp = trans.rate_mode === 'comp';
       document.getElementById('compPill').style.display = isComp ? 'inline-flex' : 'none';
       document.getElementById('startedAt').textContent = 'Mulai ' + new Date(trans.start_time).toLocaleTimeString('id-ID');
-      document.getElementById('thresholdText').textContent = isComp
-        ? `Komplimen VIP/VVIP: ${trans.comp_hours} jam · +${trans.extra_hours_used} jam tambahan`
-        : `Threshold: ${rupiah(trans.threshold_amount)} (${trans.threshold_window}) · +${trans.extra_hours_used} jam`;
+      document.getElementById('thresholdText').textContent = trans.is_test
+        ? `Tes fisik room — cek lagu & mic. Player menyala.`
+        : isComp
+          ? `Komplimen VIP/VVIP: ${trans.comp_hours} jam · +${trans.extra_hours_used} jam tambahan`
+          : `Threshold: ${rupiah(trans.threshold_amount)} (${trans.threshold_window}) · +${trans.extra_hours_used} jam`;
       document.getElementById('invoiceBadge').textContent = trans.trans_id;
+
+      // Mode Test: ubah aksi jadi "Selesai Tes", sembunyikan Add Time.
+      if (trans.is_test) {
+        document.getElementById('btnAddJam').style.display = 'none';
+        const s = document.getElementById('btnSettle');
+        s.textContent = '✓ Selesai Tes (matikan player)';
+        document.getElementById('btnBatal').textContent = 'Batalkan Tes';
+        if (testSession) {
+          document.getElementById('allotInfo').textContent =
+            `Player mati otomatis ${new Date(testSession.expires_at).toLocaleTimeString('id-ID')}` +
+            ` (${testSession.minutes} mnt) kalau tidak ditutup manual.`;
+        }
+      }
       if (time_credit) {
         const th = time_credit.allotted_hours;
         const alloc = `Alokasi: ${Math.floor(th)}j ${Math.round((th % 1) * 60)}m`;
@@ -161,7 +178,21 @@
       } catch (err) { showMsg(err.message, 'error'); }
     });
 
-    document.getElementById('btnSettle').addEventListener('click', () => {
+    document.getElementById('btnSettle').addEventListener('click', async () => {
+      // Mode Test: "Selesai Tes" = tutup sesi & matikan player (tanpa checkout).
+      if (transData && transData.is_test) {
+        const btn = document.getElementById('btnSettle');
+        btn.disabled = true;
+        try {
+          await Api.tutupKamar(transId, null, newRequestKey());
+          showMsg('Tes selesai — player dimatikan.', 'success');
+          setTimeout(() => (window.location.href = '/dashboard.html'), 700);
+        } catch (err) {
+          showMsg(err.message, 'error');
+          btn.disabled = false;
+        }
+        return;
+      }
       window.location.href = `/checkout.html?id=${transId}`;
     });
 
@@ -440,8 +471,20 @@
     function renderCountdown() {
       const el = document.getElementById('sessionTimer');
       if (!transData) return;
+      if (transData.is_test) {
+        // Mode Test: hitung mundur ke auto-mati player.
+        if (testSession) {
+          const { text, overtime } = formatCountdown(testSession.expires_at);
+          el.textContent = text;
+          el.classList.toggle('overtime', overtime);
+          document.getElementById('timerLabel').textContent = overtime ? 'Player Sedang Dimatikan' : 'Player Mati Dalam';
+        } else {
+          el.textContent = formatDuration(transData.start_time);
+          document.getElementById('timerLabel').textContent = 'Durasi Tes';
+        }
+        return;
+      }
       if (!timeCredit) {
-        // Mode Test / tanpa alokasi waktu -> tampilkan durasi berjalan saja.
         el.textContent = formatDuration(transData.start_time);
         el.classList.remove('overtime');
         document.getElementById('timerLabel').textContent = 'Durasi Sesi';
