@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Laporan F&B Hotel - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+<style>
+  .rep-toolbar { display:flex; gap:10px; align-items:flex-end; flex-wrap:wrap; margin-bottom:16px; }
+  .rep-toolbar label { display:block; font-size:11px; color:var(--text-muted); margin-bottom:4px; }
+  .rep-cards { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px,1fr)); gap:12px; margin-bottom:16px; }
+  .rep-card { background:var(--card,#fff); border:1px solid var(--border,#e5e5e5); border-radius:10px; padding:12px 14px; }
+  .rep-card .k { font-size:11px; color:var(--text-muted); }
+  .rep-card .v { font-size:18px; font-weight:700; margin-top:3px; }
+  .muted-note { font-size:11.5px; color:var(--text-muted); }
+  .rep-actions { display:flex; gap:8px; flex-wrap:wrap; margin:10px 0 20px; }
+</style>
+</head>
+<body>
+  <div id="shell"></div>
+  <div id="pageContent">
+    <div id="repGate" style="display:none" class="card">Halaman ini khusus admin / supervisor.</div>
+
+    <div id="repMain" style="display:none">
+      <div class="card">
+        <div class="rep-toolbar">
+          <div>
+            <label for="repDate">Tanggal usaha</label>
+            <input type="date" id="repDate" class="field" />
+          </div>
+          <button class="btn btn-primary" id="btnShow">Tampilkan</button>
+          <span class="muted-note" id="repRange"></span>
+        </div>
+
+        <div id="repWrap"><p class="muted-note">Pilih tanggal lalu tekan Tampilkan.</p></div>
+
+        <div class="rep-actions" id="repActions" style="display:none">
+          <button class="btn btn-outline" id="btnCsv">Unduh CSV</button>
+          <button class="btn btn-outline" id="btnPrint">Cetak Halaman</button>
+          <button class="btn btn-primary" id="btnClose">Tutup Hari F&amp;B Hotel &amp; Kirim Email</button>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <h3 style="margin:0 0 8px">Riwayat</h3>
+        <div id="repHistory" style="overflow-x:auto"><p class="muted-note">Memuat…</p></div>
+      </div>
+    </div>
+
+    <div id="modalMount"></div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script>
+    renderLayout({ active: 'fnb-hotel', title: 'Laporan F&B Hotel', subtitle: 'Rekap harian per kamar' });
+
+    const canClose = ['admin', 'supervisor'].includes((getUser() || {}).role);
+    const modalMount = document.getElementById('modalMount');
+    function closeModal() { modalMount.innerHTML = ''; }
+    modalMount.addEventListener('click', (e) => { if (e.target === modalMount.firstElementChild) closeModal(); });
+
+    let lastReport = null, lastMeta = null, historyDates = new Set();
+
+    function rp(n) { return 'Rp' + Number(n || 0).toLocaleString('id-ID'); }
+    function escHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function tbl(headers, rows) {
+      const th = headers.map((h) => `<th>${h}</th>`).join('');
+      const body = rows.length
+        ? rows.map((r) => '<tr>' + r.map((c, i) => `<td class="${i ? 'num' : ''}">${c}</td>`).join('') + '</tr>').join('')
+        : `<tr><td colspan="${headers.length}" class="muted-note">— tidak ada data —</td></tr>`;
+      return `<div style="overflow-x:auto"><table class="summary-table"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`;
+    }
+    function localDateStr(d) {
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+
+    function renderReport(r) {
+      lastReport = r;
+      const s = r.summary;
+      if (r.business_date && document.getElementById('repDate').value !== r.business_date) {
+        document.getElementById('repDate').value = r.business_date;
+      }
+      document.getElementById('repRange').textContent = `${r.range_start} s/d ${r.range_end} WIB · cutoff ${r.eod_cutoff_hour}:00`;
+
+      const cards = [
+        ['Total ke folio', rp(s.total_amount)],
+        ['Order', Number(s.order_count).toLocaleString('id-ID')],
+        ['Kamar', Number(s.room_count).toLocaleString('id-ID')],
+        [`SC ${r.sc_pct}% (inklusif)`, rp(s.sc_component_total)],
+        ['Dasar', rp(s.base_amount_total)],
+      ].map(([k, v]) => `<div class="rep-card"><div class="k">${k}</div><div class="v">${v}</div></div>`).join('');
+
+      const roomRows = r.by_room.map((x) => [escHtml(x.hotel_room_no), Number(x.order_count).toLocaleString('id-ID'), '<b>' + rp(x.total_amount) + '</b>']);
+      roomRows.push(['<b>TOTAL</b>', Number(s.order_count).toLocaleString('id-ID'), '<b>' + rp(s.total_amount) + '</b>']);
+
+      const detailRows = [];
+      for (const room of r.by_room) {
+        for (const o of room.orders) {
+          detailRows.push([
+            `Kamar ${escHtml(room.hotel_room_no)} · ${escHtml(String(o.created_at).slice(11, 16))} · ${escHtml(o.created_by_name)}`,
+            escHtml(o.items.map((it) => `${it.qty}x ${it.name}`).join(', ')),
+            rp(o.total_amount),
+          ]);
+        }
+      }
+
+      const cancelled = r.cancelled && r.cancelled.count
+        ? `<p class="muted-note" style="color:var(--red)">Dibatalkan hari ini (tidak termasuk total): ${r.cancelled.count} order · ${rp(r.cancelled.total)}</p>`
+        : '';
+
+      document.getElementById('repWrap').innerHTML =
+        `<div class="rep-cards">${cards}</div>
+         <p class="muted-note">Front desk memposting kolom <b>Total ke folio</b> apa adanya ke folio kamar (SC 7% sudah termasuk).</p>
+         <h4 style="margin:14px 0 4px;font-size:13px">Per kamar</h4>${tbl(['Kamar', 'Jml order', 'Total ke folio'], roomRows)}
+         ${cancelled}
+         <h4 style="margin:14px 0 4px;font-size:13px">Rincian order</h4>${tbl(['Order', 'Item', 'Total'], detailRows)}`;
+
+      document.getElementById('repActions').style.display = 'flex';
+    }
+
+    async function show() {
+      const date = document.getElementById('repDate').value;
+      const btn = document.getElementById('btnShow');
+      btn.disabled = true;
+      try {
+        const resp = await Api.getHotelFnbReport(date || undefined);
+        lastMeta = { recipients: resp.recipients, smtp_configured: resp.smtp_configured };
+        renderReport(resp.report);
+      } catch (err) {
+        if (err.status === 403) { gate(); return; }
+        showToast('Gagal memuat laporan: ' + err.message, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function gate() {
+      document.getElementById('repMain').style.display = 'none';
+      document.getElementById('repGate').style.display = 'block';
+    }
+
+    function openCloseModal() {
+      const date = document.getElementById('repDate').value;
+      const recips = (lastMeta && lastMeta.recipients) || [];
+      const smtpOk = lastMeta && lastMeta.smtp_configured;
+      const already = historyDates.has(date);
+      modalMount.innerHTML = `
+        <div class="modal-overlay">
+          <div class="modal-box card">
+            <h3>Tutup Hari F&amp;B Hotel — ${escHtml(date)}</h3>
+            <p class="muted">Total ${rp(lastReport ? lastReport.summary.total_amount : 0)} · ${lastReport ? lastReport.summary.order_count : 0} order.</p>
+            ${smtpOk
+              ? `<p style="font-size:12px">Email ke: <b>${recips.map(escHtml).join(', ') || '(kosong)'}</b></p>`
+              : `<p class="error-text" style="display:block">SMTP / HOTEL_FNB_RECIPIENTS belum dikonfigurasi — snapshot tetap disimpan tapi <b>tidak</b> terkirim.</p>`}
+            ${already ? `<p class="error-text" style="display:block">Tanggal ini sudah pernah ditutup — aksi ini membuat versi baru & kirim ulang.</p>` : ''}
+            <div id="clErr" class="error-text" style="display:none"></div>
+            <button class="btn btn-primary btn-block" id="clSubmit">${smtpOk ? 'Simpan & Kirim Email' : 'Simpan (tanpa email)'}</button>
+            <button class="btn btn-outline btn-block" id="clCancel" style="margin-top:8px">Batal</button>
+          </div>
+        </div>`;
+      document.getElementById('clCancel').addEventListener('click', closeModal);
+      document.getElementById('clSubmit').addEventListener('click', async () => {
+        const b = document.getElementById('clSubmit');
+        const errEl = document.getElementById('clErr');
+        errEl.style.display = 'none'; b.disabled = true;
+        try {
+          const res = await Api.closeHotelFnb(date, !!smtpOk);
+          closeModal();
+          if (res.emailed) showToast('Rekap tersimpan & email terkirim.');
+          else if (res.email_error) showToast('Tersimpan, email GAGAL: ' + res.email_error, 'error');
+          else showToast('Rekap tersimpan (versi ' + (res.daily_close ? res.daily_close.version : '?') + ').');
+          renderReport(res.report);
+          await loadHistory();
+        } catch (err) {
+          errEl.textContent = err.message; errEl.style.display = 'block'; b.disabled = false;
+        }
+      });
+    }
+
+    async function loadHistory() {
+      try {
+        const { history } = await Api.getHotelFnbHistory(60);
+        historyDates = new Set(history.map((h) => String(h.business_date).slice(0, 10)));
+        const el = document.getElementById('repHistory');
+        if (!history.length) { el.innerHTML = '<p class="muted-note">Belum ada Tutup Hari F&B Hotel.</p>'; return; }
+        el.innerHTML = `<table class="summary-table">
+          <thead><tr><th>Tanggal</th><th class="num">Versi</th><th>Dibuat</th><th class="num">Order</th><th class="num">Total</th><th>Email</th><th></th></tr></thead>
+          <tbody>${history.map((h) => {
+            const bd = String(h.business_date).slice(0, 10);
+            const emailCell = h.email_error
+              ? `<span style="color:var(--red)">gagal: ${escHtml(h.email_error).slice(0, 50)}</span>`
+              : (h.emailed_at ? escHtml(String(h.emailed_at)) : '—');
+            return `<tr>
+              <td>${escHtml(bd)}</td>
+              <td class="num">${h.version}</td>
+              <td>${escHtml(String(h.generated_at))}${h.generated_by_name ? ' · ' + escHtml(h.generated_by_name) : ''}</td>
+              <td class="num">${h.order_count}</td>
+              <td class="num">${rp(h.total_amount)}</td>
+              <td>${emailCell}</td>
+              <td>
+                <button class="btn btn-outline" data-act="view" data-bd="${bd}" style="padding:4px 9px;font-size:11px">Lihat</button>
+                <button class="btn btn-outline" data-act="csv" data-bd="${bd}" style="padding:4px 9px;font-size:11px">CSV</button>
+                ${canClose ? `<button class="btn btn-outline" data-act="resend" data-bd="${bd}" style="padding:4px 9px;font-size:11px">Kirim Ulang</button>` : ''}
+              </td>
+            </tr>`;
+          }).join('')}</tbody></table>`;
+        el.querySelectorAll('button[data-act]').forEach((b) => b.addEventListener('click', () => histAction(b.dataset.act, b.dataset.bd, b)));
+      } catch (err) {
+        if (err.status === 403) { gate(); return; }
+        document.getElementById('repHistory').innerHTML = `<p class="error-text" style="display:block">${escHtml(err.message)}</p>`;
+      }
+    }
+
+    async function histAction(act, bd, btn) {
+      try {
+        if (act === 'view') {
+          const { report } = await Api.getStoredHotelFnb(bd);
+          document.getElementById('repDate').value = bd;
+          renderReport(report);
+        } else if (act === 'csv') {
+          await Api.downloadHotelFnbCsv(bd, true);
+        } else if (act === 'resend') {
+          btn.disabled = true;
+          const res = await Api.resendHotelFnb(bd);
+          showToast(res.emailed ? 'Email terkirim ulang.' : ('Kirim ulang GAGAL: ' + (res.email_error || '?')), res.emailed ? 'success' : 'error');
+          await loadHistory();
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    if (!canClose) {
+      // GET /daily butuh admin/supervisor -> non-admin langsung gate.
+      gate();
+    } else {
+      document.getElementById('repMain').style.display = 'block';
+      document.getElementById('repDate').value = localDateStr(new Date());
+      document.getElementById('btnShow').addEventListener('click', show);
+      document.getElementById('btnCsv').addEventListener('click', async () => {
+        try { await Api.downloadHotelFnbCsv(document.getElementById('repDate').value); }
+        catch (err) { showToast(err.message, 'error'); }
+      });
+      document.getElementById('btnPrint').addEventListener('click', () => window.print());
+      document.getElementById('btnClose').addEventListener('click', openCloseModal);
+      show();
+      loadHistory();
+    }
+  </script>
+</body>
+</html>

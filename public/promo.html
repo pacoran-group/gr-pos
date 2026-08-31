@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Promo - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+<style>
+  .promo-card { margin-bottom: 12px; }
+  .promo-row { display: flex; gap: 12px; align-items: flex-start; padding: 12px 0; border-bottom: 1px solid var(--border-soft); }
+  .promo-row:last-child { border-bottom: none; }
+  .promo-row .body { flex: 1; min-width: 0; }
+  .promo-row .name { font-weight: 700; font-size: 14px; }
+  .promo-row .meta { font-size: 11.5px; color: var(--text-muted); margin-top: 3px; line-height: 1.5; }
+  .promo-row .acts { display: flex; gap: 6px; flex-shrink: 0; }
+  .badge2 { font-size: 10px; padding: 2px 7px; border-radius: 9px; font-weight: 700; text-transform: uppercase; }
+  .badge2.b1g1 { background: var(--cyan-dim); color: var(--cyan); }
+  .badge2.bundle { background: var(--purple-dim); color: var(--purple); }
+  .badge2.on { background: var(--green-dim); color: var(--green); }
+  .badge2.off { background: var(--gray-dim); color: var(--text-muted); }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin: 8px 0 12px; }
+  .form-grid .full { grid-column: 1 / -1; }
+  .form-grid .field, .form-grid select.field { margin: 0; width: 100%; }
+  .days { display: flex; gap: 5px; flex-wrap: wrap; }
+  .days label { display: flex; align-items: center; gap: 4px; font-size: 12px; background: var(--card-inset); padding: 4px 8px; border-radius: 7px; }
+  .comp-row { display: flex; gap: 8px; margin-bottom: 6px; }
+  .comp-row select { flex: 1; }
+  .comp-row input { width: 64px; }
+  .comp-row button { flex-shrink: 0; }
+  .muted-note { font-size: 11.5px; color: var(--text-muted); }
+  .type-tabs { display: flex; gap: 8px; margin-bottom: 8px; }
+  .type-tabs button { flex: 1; }
+  .type-tabs button.sel { border-color: var(--cyan); color: var(--cyan); }
+</style>
+</head>
+<body>
+  <div id="shell"></div>
+  <div id="pageContent">
+    <div id="gate" style="display:none" class="card">Halaman ini khusus admin / supervisor.</div>
+    <div id="main" style="display:none">
+      <div class="card">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <h3 style="margin:0">Promo Aktif &amp; Terjadwal</h3>
+          <button class="btn btn-primary" id="btnNew">+ Promo Baru</button>
+        </div>
+        <p class="muted-note">Promo di-<b>auto-apply</b> server saat buka kamar / tambah order kalau sedang berlaku (tanggal + jam + hari). Satu produk hanya boleh dipakai <b>satu</b> promo aktif.</p>
+        <div id="listWrap" style="margin-top:10px"><p class="muted-note">Memuat…</p></div>
+      </div>
+    </div>
+    <div id="modalMount"></div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script>
+    renderLayout({ active: 'promo', title: 'Promo', subtitle: 'B1G1 & paket' });
+    const canManage = ['admin', 'supervisor'].includes((getUser() || {}).role);
+    const modalMount = document.getElementById('modalMount');
+    const DOW = [['1','Sen'],['2','Sel'],['3','Rab'],['4','Kam'],['5','Jum'],['6','Sab'],['7','Min']];
+    const rp = (n) => 'Rp' + Number(n || 0).toLocaleString('id-ID');
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    let products = [];   // {product_id, product_name, price}
+    let prodName = {};
+
+    function closeModal() { modalMount.innerHTML = ''; }
+    modalMount.addEventListener('click', (e) => { if (e.target === modalMount.firstElementChild) closeModal(); });
+
+    function windowText(p) {
+      const parts = [];
+      if (p.start_date || p.end_date) parts.push(`${p.start_date ? String(p.start_date).slice(0,10) : '…'} s/d ${p.end_date ? String(p.end_date).slice(0,10) : '…'}`);
+      if (p.start_time || p.end_time) parts.push(`jam ${String(p.start_time||'00:00').slice(0,5)}–${String(p.end_time||'23:59').slice(0,5)}`);
+      if (p.days_of_week) parts.push('hari ' + String(p.days_of_week).split(',').map((d) => (DOW.find((x) => x[0] === d) || [,d])[1]).join('/'));
+      return parts.length ? parts.join(' · ') : 'kapan saja';
+    }
+
+    function ruleText(p) {
+      if (p.type === 'b1g1') {
+        return `Beli ${p.buy_qty} gratis ${p.free_qty} — ${esc(p.product_name || p.product_id)} (${rp(p.product_price)})`;
+      }
+      const comps = (p.components || []).map((c) => `${c.qty}× ${esc(c.product_name || c.product_id)}`).join(' + ');
+      return `${comps} = ${rp(p.bundle_price)}`;
+    }
+
+    async function load() {
+      try {
+        if (!products.length) {
+          const r = await Api.getProducts();
+          products = (r.products || []).sort((a, b) => String(a.product_name).localeCompare(String(b.product_name)));
+          prodName = Object.fromEntries(products.map((p) => [String(p.product_id), p.product_name]));
+        }
+        const { promos } = await Api.listPromos();
+        renderList(promos);
+      } catch (err) {
+        if (err.status === 403) { gate(); return; }
+        document.getElementById('listWrap').innerHTML = `<p class="error-text" style="display:block">${esc(err.message)}</p>`;
+      }
+    }
+
+    function renderList(promos) {
+      const wrap = document.getElementById('listWrap');
+      if (!promos.length) { wrap.innerHTML = '<p class="muted-note">Belum ada promo.</p>'; return; }
+      wrap.innerHTML = promos.map((p) => `
+        <div class="promo-row">
+          <div class="body">
+            <div class="name">${esc(p.name)}
+              <span class="badge2 ${p.type}">${p.type === 'b1g1' ? 'B1G1' : 'PAKET'}</span>
+              <span class="badge2 ${p.active ? 'on' : 'off'}">${p.active ? 'AKTIF' : 'NONAKTIF'}</span>
+            </div>
+            <div class="meta">${ruleText(p)}<br/>${windowText(p)}${p.note ? ' · ' + esc(p.note) : ''}</div>
+          </div>
+          <div class="acts">
+            <button class="btn btn-outline" style="padding:5px 10px;font-size:11px" data-edit="${p.promo_id}">Edit</button>
+            <button class="btn btn-outline" style="padding:5px 10px;font-size:11px" data-del="${p.promo_id}">Hapus</button>
+          </div>
+        </div>`).join('');
+      wrap.querySelectorAll('button[data-edit]').forEach((b) =>
+        b.addEventListener('click', () => openForm(promos.find((x) => String(x.promo_id) === b.dataset.edit))));
+      wrap.querySelectorAll('button[data-del]').forEach((b) =>
+        b.addEventListener('click', () => del(b.dataset.del)));
+    }
+
+    async function del(id) {
+      if (!confirm('Hapus promo ini? Transaksi lama tidak terpengaruh.')) return;
+      try { await Api.deletePromo(id); showToast('Promo dihapus.'); load(); }
+      catch (err) { showToast(err.message, 'error'); }
+    }
+
+    function prodOptions(selected) {
+      return '<option value="">— pilih produk —</option>' + products.map((p) =>
+        `<option value="${esc(p.product_id)}" ${String(p.product_id) === String(selected) ? 'selected' : ''}>${esc(p.product_name)} (${rp(p.price)})</option>`).join('');
+    }
+
+    function openForm(p) {
+      const isEdit = !!p;
+      const v = p || { type: 'b1g1', buy_qty: 1, free_qty: 1, active: 1, components: [] };
+      let curType = v.type || 'b1g1';
+      const daysSel = v.days_of_week ? String(v.days_of_week).split(',') : [];
+
+      modalMount.innerHTML = `
+        <div class="modal-overlay"><div class="modal-box card" style="max-width:520px">
+          <h3>${isEdit ? 'Edit Promo' : 'Promo Baru'}</h3>
+          <div id="formErr" class="error-text" style="display:none"></div>
+
+          <label class="field-label">Nama promo</label>
+          <input class="field" id="f_name" value="${esc(v.name || '')}" placeholder="mis. B1G1 Jus Jumat Sore" />
+
+          <div class="type-tabs" style="margin-top:10px">
+            <button class="btn btn-outline ${curType === 'b1g1' ? 'sel' : ''}" data-type="b1g1">Buy 1 Get 1</button>
+            <button class="btn btn-outline ${curType === 'bundle' ? 'sel' : ''}" data-type="bundle">Paket Harga</button>
+          </div>
+
+          <div id="typeBox"></div>
+
+          <div class="form-grid" style="margin-top:12px">
+            <div><label class="field-label">Mulai tanggal</label><input type="date" class="field" id="f_sd" value="${v.start_date ? String(v.start_date).slice(0,10) : ''}" /></div>
+            <div><label class="field-label">Sampai tanggal</label><input type="date" class="field" id="f_ed" value="${v.end_date ? String(v.end_date).slice(0,10) : ''}" /></div>
+            <div><label class="field-label">Mulai jam</label><input type="time" class="field" id="f_st" value="${v.start_time ? String(v.start_time).slice(0,5) : ''}" /></div>
+            <div><label class="field-label">Sampai jam</label><input type="time" class="field" id="f_et" value="${v.end_time ? String(v.end_time).slice(0,5) : ''}" /></div>
+            <div class="full"><label class="field-label">Hari berlaku (kosong / semua = tiap hari)</label>
+              <div class="days" id="f_days">${DOW.map(([n,l]) => `<label><input type="checkbox" value="${n}" ${daysSel.includes(n) ? 'checked' : ''}/> ${l}</label>`).join('')}</div>
+            </div>
+            <div class="full"><label class="field-label">Catatan (opsional)</label><input class="field" id="f_note" value="${esc(v.note || '')}" /></div>
+            <div class="full"><label class="chk" style="display:flex;gap:8px;align-items:center;font-size:13px"><input type="checkbox" id="f_active" ${v.active ? 'checked' : ''}/> Aktif</label></div>
+          </div>
+
+          <button class="btn btn-primary btn-block" id="f_save">${isEdit ? 'Simpan' : 'Buat Promo'}</button>
+          <button class="btn btn-outline btn-block" id="f_cancel" style="margin-top:8px">Batal</button>
+        </div></div>`;
+
+      function renderType() {
+        const box = document.getElementById('typeBox');
+        if (curType === 'b1g1') {
+          box.innerHTML = `
+            <label class="field-label">Produk (sama persis)</label>
+            <select class="field" id="f_prod">${prodOptions(v.product_id)}</select>
+            <div class="form-grid" style="margin-top:8px">
+              <div><label class="field-label">Beli qty</label><input type="number" min="1" class="field" id="f_buy" value="${v.buy_qty || 1}" /></div>
+              <div><label class="field-label">Gratis qty</label><input type="number" min="1" class="field" id="f_free" value="${v.free_qty || 1}" /></div>
+            </div>`;
+        } else {
+          const comps = (v.components && v.components.length) ? v.components : [{ product_id: '', qty: 1 }, { product_id: '', qty: 1 }];
+          box.innerHTML = `
+            <label class="field-label">Komponen paket (min. 2)</label>
+            <div id="compList">${comps.map((c) => compRowHtml(c)).join('')}</div>
+            <button class="btn btn-outline" id="addComp" style="padding:4px 10px;font-size:11px;margin-top:2px">+ komponen</button>
+            <label class="field-label" style="margin-top:10px">Harga paket (Rp)</label>
+            <input type="number" min="0" step="500" class="field" id="f_bprice" value="${v.bundle_price != null ? v.bundle_price : ''}" />`;
+          box.querySelector('#addComp').addEventListener('click', (e) => {
+            e.preventDefault();
+            box.querySelector('#compList').insertAdjacentHTML('beforeend', compRowHtml({ product_id: '', qty: 1 }));
+            bindCompRemove();
+          });
+          bindCompRemove();
+        }
+      }
+      function compRowHtml(c) {
+        return `<div class="comp-row">
+          <select>${prodOptions(c.product_id)}</select>
+          <input type="number" min="1" value="${c.qty || 1}" />
+          <button class="btn btn-outline" style="padding:4px 8px;font-size:11px" data-rmcomp>×</button>
+        </div>`;
+      }
+      function bindCompRemove() {
+        document.querySelectorAll('#compList [data-rmcomp]').forEach((b) => {
+          b.onclick = (e) => { e.preventDefault(); if (document.querySelectorAll('#compList .comp-row').length > 2) b.closest('.comp-row').remove(); };
+        });
+      }
+
+      modalMount.querySelectorAll('[data-type]').forEach((b) =>
+        b.addEventListener('click', (e) => {
+          e.preventDefault();
+          curType = b.dataset.type;
+          modalMount.querySelectorAll('[data-type]').forEach((x) => x.classList.toggle('sel', x.dataset.type === curType));
+          renderType();
+        }));
+      renderType();
+      document.getElementById('f_cancel').addEventListener('click', closeModal);
+      document.getElementById('f_save').addEventListener('click', () => save(isEdit ? v.promo_id : null, curType));
+    }
+
+    async function save(editId, type) {
+      const days = [...document.querySelectorAll('#f_days input:checked')].map((c) => c.value);
+      const body = {
+        name: document.getElementById('f_name').value.trim(),
+        type,
+        active: document.getElementById('f_active').checked,
+        start_date: document.getElementById('f_sd').value || null,
+        end_date: document.getElementById('f_ed').value || null,
+        start_time: document.getElementById('f_st').value || null,
+        end_time: document.getElementById('f_et').value || null,
+        days_of_week: days.length ? days : null,
+        note: document.getElementById('f_note').value.trim() || null,
+      };
+      if (type === 'b1g1') {
+        body.product_id = document.getElementById('f_prod').value;
+        body.buy_qty = document.getElementById('f_buy').value;
+        body.free_qty = document.getElementById('f_free').value;
+      } else {
+        body.bundle_price = document.getElementById('f_bprice').value;
+        body.components = [...document.querySelectorAll('#compList .comp-row')].map((r) => ({
+          product_id: r.querySelector('select').value,
+          qty: r.querySelector('input').value,
+        })).filter((c) => c.product_id);
+      }
+      const err = document.getElementById('formErr');
+      const btn = document.getElementById('f_save');
+      err.style.display = 'none';
+      btn.disabled = true;
+      try {
+        if (editId) await Api.updatePromo(editId, body);
+        else await Api.createPromo(body);
+        closeModal();
+        showToast(editId ? 'Promo diperbarui.' : 'Promo dibuat.');
+        load();
+      } catch (e) {
+        err.textContent = e.message;
+        err.style.display = 'block';
+        btn.disabled = false;
+      }
+    }
+
+    function gate() {
+      document.getElementById('main').style.display = 'none';
+      document.getElementById('gate').style.display = 'block';
+    }
+
+    if (!canManage) gate();
+    else {
+      document.getElementById('main').style.display = 'block';
+      document.getElementById('btnNew').addEventListener('click', () => openForm(null));
+      load();
+    }
+  </script>
+</body>
+</html>

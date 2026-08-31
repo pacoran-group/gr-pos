@@ -1,0 +1,284 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>F&B Hotel - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+<style>
+  .fh-note { font-size:11.5px; color:var(--text-muted); margin-top:2px; }
+  #fhToday table { margin-top:6px; }
+  .fh-badge-cancel { color:var(--red); font-weight:700; font-size:11px; }
+</style>
+</head>
+<body>
+  <div id="shell"></div>
+
+  <div id="pageContent">
+    <div class="orders-layout">
+      <div>
+        <div class="category-tabs" id="categoryTabs"></div>
+        <div class="item-grid" id="itemGrid"></div>
+      </div>
+
+      <div class="order-cart">
+        <h3>Order F&amp;B Hotel</h3>
+        <p class="fh-note">Masuk tagihan kamar (folio) — di-posting front desk hotel. Harga menu sudah termasuk service charge.</p>
+
+        <label class="field-label">Nomor Kamar Hotel</label>
+        <input class="field" id="hotelRoom" placeholder="mis. 214" autocomplete="off" />
+        <label class="field-label">Nama Tamu (opsional)</label>
+        <input class="field" id="custName" placeholder="-" autocomplete="off" />
+
+        <div id="cartLines" style="margin-top:12px"></div>
+        <div id="cartEmpty" class="cart-empty">Belum ada item dipilih.</div>
+
+        <div class="totals-block">
+          <div class="totals-row grand"><span>Total (ke folio)</span><span id="cartTotal">Rp0</span></div>
+          <div class="fh-note" id="scNote"></div>
+        </div>
+
+        <div id="submitError" class="error-text" style="display:none"></div>
+        <button class="btn btn-primary btn-block" id="btnSubmit" style="margin-top:12px">Kirim ke Dapur</button>
+        <a href="/fnb-hotel-report.html" style="display:block;text-align:center;margin-top:10px;font-size:12px;color:var(--text-muted)">Laporan Harian F&amp;B Hotel →</a>
+      </div>
+    </div>
+
+    <div class="card" id="fhToday" style="margin-top:16px">
+      <h3 style="margin:0 0 6px">Order Hotel Hari Ini</h3>
+      <div id="fhTodayBody" style="overflow-x:auto"><p class="fh-note">Memuat…</p></div>
+    </div>
+
+    <div id="modalMount"></div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.4/qz-tray.js"></script>
+  <script src="/js/qz-print.js"></script>
+  <script>
+    let searchTerm = '';
+    renderLayout({
+      active: 'fnb-hotel', title: 'F&B Hotel', subtitle: 'Order ke dapur (folio hotel)',
+      onSearch: (q) => { searchTerm = q; renderItemGrid(); },
+    });
+
+    const modalMount = document.getElementById('modalMount');
+    function closeModal() { modalMount.innerHTML = ''; }
+    modalMount.addEventListener('click', (e) => { if (e.target === modalMount.firstElementChild) closeModal(); });
+
+    let products = [];
+    let categoriesCache = [];
+    let activeCategory = 'all';
+    let cart = []; // { product_id, product_name, price, qty }
+    let pendingRequestKey = null;
+    function requestKeyForSubmit() {
+      if (!pendingRequestKey) pendingRequestKey = newRequestKey();
+      return pendingRequestKey;
+    }
+
+    function categoryEmoji(name) {
+      const n = (name || '').toLowerCase();
+      if (n.includes('makan')) return '🍔';
+      if (n.includes('minum')) return '🥤';
+      if (n.includes('snack')) return '🍟';
+      if (n.includes('rokok')) return '🚬';
+      if (n.includes('bar')) return '🍸';
+      return '🍽️';
+    }
+    function categoryNameOf(id) {
+      const c = categoriesCache.find((x) => String(x.category_id) === String(id));
+      return c ? c.category_name : '';
+    }
+
+    async function initCatalog() {
+      try {
+        const [{ products: p }, { categories }] = await Promise.all([Api.getProducts(), Api.getCategories()]);
+        products = p; categoriesCache = categories;
+        renderCategoryTabs(categories);
+        renderItemGrid();
+        renderCart();
+      } catch (e) {
+        document.getElementById('itemGrid').innerHTML =
+          `<div style="padding:24px;color:var(--red)">Gagal memuat katalog menu: ${e.message}</div>`;
+        showToast('Gagal memuat katalog: ' + e.message, 'error');
+      }
+    }
+
+    function renderCategoryTabs(categories) {
+      const wrap = document.getElementById('categoryTabs');
+      const tabs = [{ category_id: 'all', category_name: 'All Items' }, ...categories];
+      wrap.innerHTML = tabs.map((c) => `<button class="category-tab ${c.category_id === 'all' ? 'active' : ''}" data-cat="${c.category_id}">${c.category_name}</button>`).join('');
+      wrap.querySelectorAll('.category-tab').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          activeCategory = btn.dataset.cat;
+          wrap.querySelectorAll('.category-tab').forEach((b) => b.classList.toggle('active', b === btn));
+          renderItemGrid();
+        });
+      });
+    }
+
+    function renderItemGrid() {
+      const grid = document.getElementById('itemGrid');
+      let list = activeCategory === 'all' ? products : products.filter((p) => String(p.category_id) === String(activeCategory));
+      if (searchTerm) list = list.filter((p) => (p.product_name || '').toLowerCase().includes(searchTerm));
+      if (!list.length) {
+        grid.innerHTML = `<div style="padding:18px;color:var(--text-faint)">${searchTerm ? 'Tidak ada item cocok.' : 'Kategori kosong.'}</div>`;
+        return;
+      }
+      grid.innerHTML = list.map((p) => `
+        <div class="item-card" data-id="${p.product_id}">
+          <span class="thumb">${categoryEmoji(categoryNameOf(p.category_id))}</span>
+          <div class="name">${p.product_name}</div>
+          <span class="price">${rupiah(p.price)}</span>
+          <button class="add-btn">+</button>
+        </div>`).join('');
+      grid.querySelectorAll('.item-card').forEach((el) => el.addEventListener('click', () => addToCart(el.dataset.id)));
+    }
+
+    function addToCart(productId) {
+      const p = products.find((x) => x.product_id === productId);
+      if (!p) return;
+      const line = cart.find((l) => l.product_id === productId);
+      if (line) line.qty++;
+      else cart.push({ product_id: p.product_id, product_name: p.product_name, price: Number(p.price), qty: 1 });
+      pendingRequestKey = null;
+      renderCart();
+    }
+    function changeQty(productId, delta) {
+      const line = cart.find((l) => l.product_id === productId);
+      if (!line) return;
+      line.qty += delta;
+      if (line.qty <= 0) cart = cart.filter((l) => l.product_id !== productId);
+      pendingRequestKey = null;
+      renderCart();
+    }
+
+    function renderCart() {
+      const linesEl = document.getElementById('cartLines');
+      const emptyEl = document.getElementById('cartEmpty');
+      if (!cart.length) {
+        linesEl.innerHTML = ''; emptyEl.style.display = 'block';
+      } else {
+        emptyEl.style.display = 'none';
+        linesEl.innerHTML = cart.map((l) => `
+          <div class="cart-line">
+            <div class="info"><div class="n">${l.product_name}</div><div class="p">${rupiah(l.price)}</div></div>
+            <div class="qty-stepper">
+              <button data-id="${l.product_id}" data-d="-1">-</button>
+              <span class="n">${l.qty}</span>
+              <button data-id="${l.product_id}" data-d="1">+</button>
+            </div>
+          </div>`).join('');
+        linesEl.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => changeQty(b.dataset.id, Number(b.dataset.d))));
+      }
+      const total = cart.reduce((s, l) => s + l.price * l.qty, 0);
+      document.getElementById('cartTotal').textContent = rupiah(total);
+      const sc = Math.round((total * 7) / 107);
+      document.getElementById('scNote').textContent = total ? `Termasuk service charge 7% (inklusif) ${rupiah(sc)} · dasar ${rupiah(total - sc)}` : '';
+    }
+
+    document.getElementById('btnSubmit').addEventListener('click', async () => {
+      const errEl = document.getElementById('submitError');
+      errEl.style.display = 'none';
+      const room = document.getElementById('hotelRoom').value.trim();
+      if (!room) { errEl.textContent = 'Nomor kamar hotel wajib diisi.'; errEl.style.display = 'block'; return; }
+      if (!cart.length) { errEl.textContent = 'Belum ada item.'; errEl.style.display = 'block'; return; }
+      const btn = document.getElementById('btnSubmit');
+      btn.disabled = true;
+      try {
+        const res = await Api.createHotelOrder({
+          hotel_room_no: room,
+          cust_name: document.getElementById('custName').value.trim(),
+          items: cart.map((l) => ({ product_id: l.product_id, qty: l.qty })),
+          request_key: requestKeyForSubmit(),
+        });
+        await printJobsSafely(res.print_jobs);
+        showToast(`Order Kamar ${room} terkirim — ${rupiah(res.total_amount)} (SC incl. ${rupiah(res.sc_component)}).`);
+        cart = []; pendingRequestKey = null;
+        document.getElementById('hotelRoom').value = '';
+        document.getElementById('custName').value = '';
+        renderCart();
+        await loadToday();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+      } finally {
+        btn.disabled = false;
+      }
+    });
+
+    async function printJobsSafely(jobs) {
+      for (const job of jobs || []) {
+        try {
+          await QzPrint.printJob(job);
+          await Api.ackPrint(job.print_log_id);
+        } catch (printErr) {
+          alert(`Order tersimpan, tapi cetak slip "${job.print_type}" gagal: ${printErr.message}\nCek QZ Tray & Setelan Printer.`);
+        }
+      }
+    }
+
+    function escHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    async function loadToday() {
+      try {
+        const { orders } = await Api.listHotelOrders();
+        const el = document.getElementById('fhTodayBody');
+        if (!orders.length) { el.innerHTML = '<p class="fh-note">Belum ada order hotel hari ini.</p>'; return; }
+        el.innerHTML = `<table class="summary-table">
+          <thead><tr><th>Waktu</th><th>Kamar</th><th>Item</th><th class="num">Total</th><th>Status</th><th></th></tr></thead>
+          <tbody>${orders.map((o) => `
+            <tr>
+              <td>${escHtml(String(o.created_at).slice(11, 16))}</td>
+              <td>${escHtml(o.hotel_room_no)}</td>
+              <td style="max-width:280px">${escHtml(o.items)}</td>
+              <td class="num">${rupiah(o.total_amount)}</td>
+              <td>${o.status === 'cancelled' ? `<span class="fh-badge-cancel">BATAL</span>` : 'terkirim'}</td>
+              <td>${o.status === 'sent' ? `<button class="btn btn-outline" data-cancel="${o.order_id}" data-room="${escHtml(o.hotel_room_no)}" style="padding:4px 9px;font-size:11px">Batalkan</button>` : ''}</td>
+            </tr>`).join('')}</tbody></table>`;
+        el.querySelectorAll('button[data-cancel]').forEach((b) =>
+          b.addEventListener('click', () => openCancelModal(b.dataset.cancel, b.dataset.room)));
+      } catch (err) {
+        document.getElementById('fhTodayBody').innerHTML = `<p class="error-text" style="display:block">${escHtml(err.message)}</p>`;
+      }
+    }
+
+    function openCancelModal(orderId, room) {
+      modalMount.innerHTML = `
+        <div class="modal-overlay">
+          <div class="modal-box card">
+            <h3>Batalkan Order — Kamar ${escHtml(room)}</h3>
+            <label class="field-label">Alasan (wajib)</label>
+            <input class="field" id="cxReason" placeholder="mis. salah kamar / dibatalkan tamu" />
+            <div id="cxErr" class="error-text" style="display:none"></div>
+            <button class="btn btn-danger btn-block" id="cxSubmit">Batalkan Order</button>
+            <button class="btn btn-outline btn-block" id="cxCancel" style="margin-top:8px">Tutup</button>
+          </div>
+        </div>`;
+      document.getElementById('cxCancel').addEventListener('click', closeModal);
+      document.getElementById('cxSubmit').addEventListener('click', async () => {
+        const b = document.getElementById('cxSubmit');
+        const errEl = document.getElementById('cxErr');
+        errEl.style.display = 'none';
+        const reason = document.getElementById('cxReason').value.trim();
+        if (!reason) { errEl.textContent = 'Alasan wajib diisi.'; errEl.style.display = 'block'; return; }
+        b.disabled = true;
+        try {
+          await Api.cancelHotelOrder(orderId, reason);
+          closeModal();
+          showToast('Order dibatalkan, tiket batal dikirim ke dapur.');
+          await loadToday();
+        } catch (err) {
+          errEl.textContent = err.message; errEl.style.display = 'block'; b.disabled = false;
+        }
+      });
+    }
+
+    initCatalog();
+    loadToday();
+  </script>
+</body>
+</html>

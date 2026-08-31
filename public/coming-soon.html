@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Segera Hadir - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+</head>
+<body>
+  <div id="shell"></div>
+  <div id="pageContent">
+    <div class="card" style="text-align:center;padding:60px 20px">
+      <h3 id="featTitle" style="font-size:20px">Fitur ini segera hadir</h3>
+      <p style="color:var(--text-muted)">Belum termasuk di versi MVP saat ini - lihat README/project doc untuk daftar fitur yang sudah tersedia.</p>
+    </div>
+  </div>
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script>
+    const feat = new URLSearchParams(location.search).get('f') || 'Fitur ini';
+    renderLayout({ active: feat.toLowerCase(), title: feat });
+    document.getElementById('featTitle').textContent = `${feat} - Segera Hadir`;
+  </script>
+</body>
+</html>

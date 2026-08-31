@@ -1,0 +1,465 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Detail Pesanan Ruangan - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+</head>
+<body>
+  <div id="shell"></div>
+
+  <div id="pageContent">
+    <div class="detail-layout">
+      <!-- KIRI: Info Kamar + sisa waktu -->
+      <div class="card room-info-card" style="position:sticky;top:90px">
+        <a href="/dashboard.html" style="display:inline-flex;align-items:center;gap:6px;color:var(--text-muted);font-size:12px;margin-bottom:10px" id="backLink"></a>
+        <div class="room-code-big" id="roomCodeBig">-</div>
+        <div class="tag-row">
+          <span class="pill pill-purple" id="guestPill">-</span>
+          <span class="pill pill-cyan" id="typePill">-</span>
+          <span class="pill" id="testPill" style="display:none;background:#d97706;color:#fff">🧪 MODE TEST</span>
+        </div>
+        <div style="font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.04em" id="timerLabel">Sisa Waktu</div>
+        <div class="timer-big" id="sessionTimer">--:--</div>
+        <div class="timer-sub">
+          <span id="startedAt">Mulai -</span>
+          <span id="thresholdText"></span>
+        </div>
+        <div id="allotInfo" style="font-size:11px;color:var(--text-faint);margin-top:4px"></div>
+        <button class="btn btn-outline btn-block" id="btnAddJam" style="margin-top:16px">+ Add Time (1hr)</button>
+      </div>
+
+      <!-- TENGAH: Menu (Tambah Item) -->
+      <div class="card">
+        <h3 style="display:flex;justify-content:space-between;align-items:center">
+          Tambah Item Cepat
+          <button class="btn btn-outline" id="btnTukarItem" style="font-size:11.5px;padding:6px 12px">Tukar Item</button>
+        </h3>
+        <div class="category-tabs" id="categoryTabs" style="margin-bottom:10px"></div>
+        <div id="miniGrid" style="display:flex;flex-direction:column;gap:8px;max-height:calc(100vh - 240px);overflow:auto"></div>
+      </div>
+
+      <!-- KANAN: Riwayat Order + Settle Bill -->
+      <div class="card">
+        <h3>Order History <span class="invoice-badge" id="invoiceBadge"></span></h3>
+        <ul class="timeline" id="orderTimeline"></ul>
+        <div class="totals-block">
+          <div class="totals-row"><span>Subtotal</span><span id="sumSubtotal">Rp0</span></div>
+          <div class="totals-row"><span id="sumDiscLabel" style="display:none">Diskon Member</span><span id="sumDisc" style="display:none">-Rp0</span></div>
+          <div class="totals-row" id="sumPromoRow" style="display:none"><span id="sumPromoLabel">Promo</span><span id="sumPromo">-Rp0</span></div>
+          <div class="totals-row"><span id="scLabel">Service Charge</span><span id="sumServiceCharge">Rp0</span></div>
+          <div class="totals-row grand"><span>Estimasi Total</span><span id="sumTotal">Rp0</span></div>
+        </div>
+        <button class="btn btn-pink btn-block" id="btnSettle" style="margin-top:14px">Settle Bill</button>
+        <button class="btn btn-outline btn-block" id="btnBatal" style="margin-top:8px">Batalkan Transaksi</button>
+        <div id="actionMsg" style="margin-top:10px;font-size:12.5px"></div>
+      </div>
+    </div>
+    <div id="modalMount"></div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.4/qz-tray.js"></script>
+  <script src="/js/qz-print.js"></script>
+  <script>
+    let searchTerm = '';
+    renderLayout({
+      active: 'orders', title: 'Detail Pesanan Ruangan', subtitle: 'Manage active session and orders',
+      badgeHtml: '<span class="badge-live"><span class="dot"></span>SESSION ACTIVE</span>',
+      onSearch: (q) => { searchTerm = q; renderMiniGrid(); },
+    });
+    document.getElementById('backLink').innerHTML = icon('arrowLeft', 14) + ' Kembali';
+
+    const transId = new URLSearchParams(location.search).get('id');
+    let transData = null;
+    let timeCredit = null; // { expires_at, allotted_hours, ... } dari server
+    let products = [];
+    let currentDetails = []; // baris web_tr_trans_details terakhir yang dimuat (utk modal Tukar Item)
+
+    async function load() {
+      const { trans, details, extra_hours, time_credit, promos_applied } = await Api.getTrans(transId);
+      transData = trans;
+      timeCredit = time_credit;
+      currentDetails = details;
+      document.getElementById('roomCodeBig').textContent = `Room ${trans.room_id}`;
+      document.getElementById('guestPill').textContent = `${trans.person || 0} tamu`;
+      document.getElementById('typePill').textContent = trans.room_type_snapshot;
+      document.getElementById('testPill').style.display = trans.is_test ? 'inline-flex' : 'none';
+      document.getElementById('startedAt').textContent = 'Mulai ' + new Date(trans.start_time).toLocaleTimeString('id-ID');
+      document.getElementById('thresholdText').textContent = `Threshold: ${rupiah(trans.threshold_amount)} (${trans.threshold_window}) · +${trans.extra_hours_used} jam`;
+      document.getElementById('invoiceBadge').textContent = trans.trans_id;
+      if (time_credit) {
+        const th = time_credit.allotted_hours;
+        document.getElementById('allotInfo').textContent =
+          `Alokasi: ${Math.floor(th)}j ${Math.round((th % 1) * 60)}m` +
+          ` (belanja ${rupiah(time_credit.net_fnb)} @ ${time_credit.hours_per_threshold}j/threshold` +
+          `${trans.extra_hours_used ? ` + ${trans.extra_hours_used}j tambahan` : ''})` +
+          ` · Berakhir ${new Date(time_credit.expires_at).toLocaleTimeString('id-ID')}`;
+      }
+      renderCountdown();
+
+      const tl = document.getElementById('orderTimeline');
+      const canVoid = trans.status === 'active';
+      tl.innerHTML = details.map((d) => `
+        <li>
+          <div class="desc">
+            <div class="n">${d.qty}x ${d.product_name_snapshot}${canVoid ? `
+              <button class="btn-void-line" data-detail-id="${d.id}" data-name="${encodeURIComponent(d.product_name_snapshot)}" data-qty="${d.qty}" data-price="${d.price}">Void</button>` : ''}</div>
+            <div class="t">${new Date(d.created_at).toLocaleTimeString('id-ID')} · ${d.added_at_terminal}</div>
+          </div>
+          <div class="amt">${rupiah(d.subtotal)}</div>
+        </li>
+      `).join('') || '<li style="color:var(--text-faint);border:none">Belum ada item.</li>';
+      tl.querySelectorAll('.btn-void-line').forEach((b) => {
+        b.addEventListener('click', () => openVoidModal({
+          detailId: b.dataset.detailId,
+          name: decodeURIComponent(b.dataset.name),
+          qty: Number(b.dataset.qty),
+          price: Number(b.dataset.price),
+        }));
+      });
+
+      const totalFnb = details.reduce((s, d) => s + Number(d.subtotal), 0);
+      const promoDisc = Number(trans.promo_disc_fnb || 0);
+      const afterDisc = totalFnb - Number(trans.member_disc_fnb) - Number(trans.member_disc_room) - promoDisc;
+      const sc = Math.round((afterDisc * Number(trans.service_charge_pct)) / 100);
+      document.getElementById('sumSubtotal').textContent = rupiah(totalFnb);
+      if (Number(trans.member_disc_fnb) > 0) {
+        document.getElementById('sumDiscLabel').style.display = 'inline';
+        document.getElementById('sumDisc').style.display = 'inline';
+        document.getElementById('sumDisc').textContent = '-' + rupiah(trans.member_disc_fnb);
+      }
+      if (promoDisc > 0) {
+        const names = (promos_applied || []).map((p) => p.promo_name).join(', ');
+        document.getElementById('sumPromoRow').style.display = 'flex';
+        document.getElementById('sumPromoLabel').textContent = names ? `Promo (${names})` : 'Promo';
+        document.getElementById('sumPromo').textContent = '-' + rupiah(promoDisc);
+      }
+      document.getElementById('scLabel').textContent = `Service Charge (${trans.service_charge_pct}%)`;
+      document.getElementById('sumServiceCharge').textContent = rupiah(sc);
+      document.getElementById('sumTotal').textContent = rupiah(afterDisc + sc);
+
+      if (trans.status !== 'active') {
+        ['btnAddJam', 'btnSettle', 'btnBatal'].forEach((id) => (document.getElementById(id).disabled = true));
+      }
+    }
+
+    document.getElementById('btnAddJam').addEventListener('click', async () => {
+      try {
+        await Api.tambahJam(transId);
+        showMsg('Berhasil menambah 1 jam.', 'success');
+        await load();
+      } catch (err) { showMsg(err.message, 'error'); }
+    });
+
+    document.getElementById('btnSettle').addEventListener('click', () => {
+      window.location.href = `/checkout.html?id=${transId}`;
+    });
+
+    document.getElementById('btnBatal').addEventListener('click', async () => {
+      if (!confirm('Batalkan transaksi ini? (khusus admin/supervisor)')) return;
+      try {
+        await Api.batalTrans(transId);
+        showMsg('Transaksi dibatalkan.', 'success');
+        setTimeout(() => (window.location.href = '/dashboard.html'), 800);
+      } catch (err) { showMsg(err.message, 'error'); }
+    });
+
+    function showMsg(text, type) {
+      const el = document.getElementById('actionMsg');
+      el.textContent = text;
+      el.style.color = type === 'error' ? 'var(--red)' : 'var(--green)';
+    }
+
+    // --- Katalog mini utk tambah item cepat ---
+    let activeCategory = 'all';
+    let categoriesCache = [];
+    function categoryEmoji(name) {
+      const n = (name || '').toLowerCase();
+      if (n.includes('makan')) return '🍔';
+      if (n.includes('minum')) return '🥤';
+      if (n.includes('snack')) return '🍟';
+      if (n.includes('rokok')) return '🚬';
+      if (n.includes('bar')) return '🍸';
+      return '🍽️';
+    }
+    function categoryNameOf(id) {
+      const c = categoriesCache.find((x) => String(x.category_id) === String(id));
+      return c ? c.category_name : '';
+    }
+
+    function renderCategoryTabs(categories) {
+      const wrap = document.getElementById('categoryTabs');
+      const tabs = [{ category_id: 'all', category_name: 'All Items' }, ...categories];
+      wrap.innerHTML = tabs.map((c) => `<button class="category-tab ${c.category_id === 'all' ? 'active' : ''}" data-cat="${c.category_id}">${c.category_name}</button>`).join('');
+      wrap.querySelectorAll('.category-tab').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          activeCategory = btn.dataset.cat;
+          wrap.querySelectorAll('.category-tab').forEach((b) => b.classList.toggle('active', b === btn));
+          renderMiniGrid();
+        });
+      });
+    }
+
+    function renderMiniGrid() {
+      let list = activeCategory === 'all' ? products : products.filter((p) => String(p.category_id) === String(activeCategory));
+      if (searchTerm) list = list.filter((p) => (p.product_name || '').toLowerCase().includes(searchTerm));
+      if (!list.length) {
+        document.getElementById('miniGrid').innerHTML = `<div style="padding:14px;color:var(--text-faint);font-size:12px">${
+          searchTerm ? 'Tidak ada item cocok.' : 'Kategori kosong.'
+        }</div>`;
+        return;
+      }
+      document.getElementById('miniGrid').innerHTML = list.map((p) => `
+        <div class="item-card" data-id="${p.product_id}" style="display:flex;align-items:center;gap:10px;padding:8px 10px">
+          <div style="font-size:20px">${categoryEmoji(categoryNameOf(p.category_id))}</div>
+          <div style="flex:1">
+            <div class="name" style="font-size:12.5px">${p.product_name}</div>
+            <div class="price" style="font-size:11.5px">${rupiah(p.price)}</div>
+          </div>
+          <button class="add-btn">+</button>
+        </div>
+      `).join('');
+      document.getElementById('miniGrid').querySelectorAll('.item-card').forEach((el) => {
+        el.addEventListener('click', () => quickAdd(el.dataset.id));
+      });
+    }
+
+    async function quickAdd(productId) {
+      try {
+        const res = await Api.tambahOrder(transId, [{ product_id: productId, qty: 1 }]);
+        showToast('Item ditambahkan & tiket dapur terkirim (kalau perlu dimasak).');
+        showStockWarn(res && res.stock_warnings);
+        await load();
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    // Peringatan stok minus dari server (non-blocking - order tetap jalan).
+    function showStockWarn(warnings) {
+      if (warnings && warnings.length) {
+        showToast('Stok minus: ' + warnings.map((w) => w.product_name).join(', '), 'error');
+      }
+    }
+
+    async function initCatalog() {
+      try {
+        const [{ products: p }, { categories }] = await Promise.all([Api.getProducts(), Api.getCategories()]);
+        products = p;
+        categoriesCache = categories;
+        renderCategoryTabs(categories);
+        renderMiniGrid();
+      } catch (e) {
+        console.error('Gagal memuat katalog produk:', e);
+        showToast('Gagal memuat katalog menu: ' + e.message, 'error');
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // Cetak print job lokal (slip retur / slip gudang) via QZ Tray -
+    // identik dengan printJobsSafely() di orders.html.
+    // ---------------------------------------------------------------
+    async function printJobsSafely(jobs) {
+      for (const job of jobs || []) {
+        try {
+          await QzPrint.printJob(job);
+          await Api.ackPrint(job.print_log_id);
+        } catch (printErr) {
+          alert(`Data tersimpan, tapi cetak "${job.print_type}" gagal: ${printErr.message}\nCek QZ Tray & Setelan Printer.`);
+        }
+      }
+    }
+
+    // ---------------------------------------------------------------
+    // Modal Void / Tukar Item (otorisasi supervisor/admin)
+    // ---------------------------------------------------------------
+    const modalMount = document.getElementById('modalMount');
+    function closeModal() { modalMount.innerHTML = ''; }
+    modalMount.addEventListener('click', (e) => { if (e.target === modalMount.firstElementChild) closeModal(); });
+
+    function approverFieldsHtml() {
+      return `
+        <div class="auth-sep">Otorisasi Supervisor / Admin</div>
+        <label class="field-label">Username SPV</label>
+        <input class="field" id="apprUser" autocomplete="off" />
+        <label class="field-label">Password SPV</label>
+        <input class="field" id="apprPass" type="password" autocomplete="off" />`;
+    }
+
+    function openVoidModal({ detailId, name, qty, price }) {
+      modalMount.innerHTML = `
+        <div class="modal-overlay">
+          <div class="modal-box card">
+            <h3>Void / Batalkan Item</h3>
+            <p class="muted">${name} — saat ini <b>${qty}</b> pcs @ ${rupiah(price)}</p>
+            <label class="field-label">Qty yang dibatalkan</label>
+            <input class="field" id="voidQty" type="number" min="1" max="${qty}" value="1" />
+            <label class="field-label">Alasan</label>
+            <input class="field" id="voidReason" placeholder="mis. retur tamu / salah input" />
+            ${approverFieldsHtml()}
+            <div id="voidErr" class="error-text" style="display:none"></div>
+            <button class="btn btn-danger btn-block" id="voidSubmit">Void Item</button>
+            <button class="btn btn-outline btn-block" id="voidCancel" style="margin-top:8px">Batal</button>
+          </div>
+        </div>`;
+      document.getElementById('voidCancel').addEventListener('click', closeModal);
+      document.getElementById('voidSubmit').addEventListener('click', async () => {
+        const btn = document.getElementById('voidSubmit');
+        const errEl = document.getElementById('voidErr');
+        errEl.style.display = 'none';
+        const void_qty = Number(document.getElementById('voidQty').value);
+        if (!(void_qty >= 1 && void_qty <= qty)) { errEl.textContent = `Qty harus 1..${qty}.`; errEl.style.display = 'block'; return; }
+        btn.disabled = true;
+        try {
+          const res = await Api.voidItem(transId, {
+            detail_id: Number(detailId),
+            void_qty,
+            reason: document.getElementById('voidReason').value.trim(),
+            approver_username: document.getElementById('apprUser').value.trim(),
+            approver_password: document.getElementById('apprPass').value,
+          }, newRequestKey());
+          closeModal();
+          await printJobsSafely(res.print_jobs);
+          showToast('Item di-void & slip retur dicetak.');
+          await load();
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.style.display = 'block';
+          btn.disabled = false;
+        }
+      });
+    }
+
+    function exchangeRowHtml() {
+      const opts = products.map((p) => `<option value="${p.product_id}">${p.product_name} — ${rupiah(p.price)}</option>`).join('');
+      return `
+        <div class="exch-row">
+          <select class="field grow exch-prod">${opts}</select>
+          <input class="field qty exch-qty" type="number" min="1" value="1" />
+          <button class="btn btn-outline exch-del" type="button" style="padding:6px 10px">✕</button>
+        </div>`;
+    }
+
+    function openExchangeModal() {
+      if (!currentDetails.length) { showToast('Belum ada item untuk ditukar.', 'error'); return; }
+      const lineOpts = currentDetails
+        .map((d) => `<option value="${d.id}" data-qty="${d.qty}">${d.qty}x ${d.product_name_snapshot} (${rupiah(d.price)})</option>`)
+        .join('');
+      modalMount.innerHTML = `
+        <div class="modal-overlay">
+          <div class="modal-box card">
+            <h3>Tukar Item (upsale)</h3>
+            <p class="muted">Kurangi sebagian item lama, ganti item baru. Satu kali otorisasi SPV.</p>
+            <label class="field-label">Item yang dikurangi</label>
+            <select class="field" id="exchLine">${lineOpts}</select>
+            <label class="field-label">Qty dikurangi</label>
+            <input class="field" id="exchVoidQty" type="number" min="1" value="1" />
+            <label class="field-label">Alasan</label>
+            <input class="field" id="exchReason" placeholder="mis. tukar ke minuman lain" />
+            <label class="field-label">Item pengganti</label>
+            <div id="exchRows">${exchangeRowHtml()}</div>
+            <button class="btn btn-outline" id="exchAddRow" type="button" style="font-size:11.5px;padding:5px 10px">+ baris</button>
+            ${approverFieldsHtml()}
+            <div id="exchErr" class="error-text" style="display:none;margin-top:10px"></div>
+            <button class="btn btn-primary btn-block" id="exchSubmit" style="margin-top:12px">Proses Tukar</button>
+            <button class="btn btn-outline btn-block" id="exchCancel" style="margin-top:8px">Batal</button>
+          </div>
+        </div>`;
+
+      const syncMax = () => {
+        const opt = document.getElementById('exchLine').selectedOptions[0];
+        document.getElementById('exchVoidQty').max = opt ? opt.dataset.qty : '1';
+      };
+      syncMax();
+      document.getElementById('exchLine').addEventListener('change', syncMax);
+      document.getElementById('exchAddRow').addEventListener('click', () => {
+        document.getElementById('exchRows').insertAdjacentHTML('beforeend', exchangeRowHtml());
+        bindDelRows();
+      });
+      function bindDelRows() {
+        document.querySelectorAll('#exchRows .exch-del').forEach((b) => {
+          b.onclick = () => {
+            const rows = document.querySelectorAll('#exchRows .exch-row');
+            if (rows.length > 1) b.closest('.exch-row').remove();
+          };
+        });
+      }
+      bindDelRows();
+      document.getElementById('exchCancel').addEventListener('click', closeModal);
+      document.getElementById('exchSubmit').addEventListener('click', async () => {
+        const btn = document.getElementById('exchSubmit');
+        const errEl = document.getElementById('exchErr');
+        errEl.style.display = 'none';
+        const lineOpt = document.getElementById('exchLine').selectedOptions[0];
+        const detail_id = Number(document.getElementById('exchLine').value);
+        const void_qty = Number(document.getElementById('exchVoidQty').value);
+        const maxQ = Number(lineOpt.dataset.qty);
+        if (!(void_qty >= 1 && void_qty <= maxQ)) { errEl.textContent = `Qty dikurangi harus 1..${maxQ}.`; errEl.style.display = 'block'; return; }
+        const add_items = [...document.querySelectorAll('#exchRows .exch-row')].map((row) => ({
+          product_id: row.querySelector('.exch-prod').value,
+          qty: Number(row.querySelector('.exch-qty').value),
+        })).filter((it) => it.qty > 0);
+        if (!add_items.length) { errEl.textContent = 'Minimal 1 item pengganti.'; errEl.style.display = 'block'; return; }
+        btn.disabled = true;
+        try {
+          const res = await Api.exchangeItem(transId, {
+            detail_id, void_qty,
+            reason: document.getElementById('exchReason').value.trim(),
+            add_items,
+            approver_username: document.getElementById('apprUser').value.trim(),
+            approver_password: document.getElementById('apprPass').value,
+          }, newRequestKey());
+          closeModal();
+          await printJobsSafely(res.print_jobs);
+          showToast('Tukar item berhasil.');
+          if (res.threshold_warning) showToast(res.threshold_warning, 'error');
+          showStockWarn(res.stock_warnings);
+          await load();
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.style.display = 'block';
+          btn.disabled = false;
+        }
+      });
+    }
+
+    document.getElementById('btnTukarItem').addEventListener('click', openExchangeModal);
+
+    // Hitung mundur SISA WAKTU karaoke (alokasi proporsional dgn belanja FnB).
+    let timeUpAlerted = false;
+    function renderCountdown() {
+      const el = document.getElementById('sessionTimer');
+      if (!transData) return;
+      if (!timeCredit) {
+        // Mode Test / tanpa alokasi waktu -> tampilkan durasi berjalan saja.
+        el.textContent = formatDuration(transData.start_time);
+        el.classList.remove('overtime');
+        document.getElementById('timerLabel').textContent = 'Durasi Sesi';
+        return;
+      }
+      const { text, overtime } = formatCountdown(timeCredit.expires_at);
+      el.textContent = text;
+      el.classList.toggle('overtime', overtime);
+      document.getElementById('timerLabel').textContent = overtime ? 'Lewat Waktu' : 'Sisa Waktu';
+      if (overtime && !timeUpAlerted && !transData.is_test) {
+        timeUpAlerted = true;
+        showToast(`Waktu Room ${transData.room_id} sudah habis.`, 'error');
+      }
+    }
+
+    // Peringatan stok minus dititipkan dari halaman Orders (yang langsung
+    // redirect ke sini setelah buka kamar / tambah order).
+    const pendingStockWarn = sessionStorage.getItem('gr_stock_warn');
+    if (pendingStockWarn) {
+      sessionStorage.removeItem('gr_stock_warn');
+      showToast('Stok minus: ' + pendingStockWarn, 'error');
+    }
+
+    load();
+    initCatalog();
+    setInterval(renderCountdown, 1000);
+  </script>
+</body>
+</html>

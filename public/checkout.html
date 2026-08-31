@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Checkout - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+</head>
+<body>
+  <div id="shell"></div>
+
+  <div id="pageContent">
+    <a href="#" id="backLink" style="display:inline-flex;align-items:center;gap:6px;color:var(--text-muted);font-size:12px;margin-bottom:14px"></a>
+    <h2 style="margin:0 0 18px" id="pageTitle">Checkout</h2>
+
+    <div class="checkout-layout">
+      <div class="card">
+        <h3>Order Summary</h3>
+        <div style="overflow-x:auto">
+          <table class="summary-table">
+            <thead><tr><th>Item</th><th>Qty</th><th>Harga</th><th>Total</th></tr></thead>
+            <tbody id="summaryBody"></tbody>
+          </table>
+        </div>
+        <div class="totals-block">
+          <div class="totals-row"><span>Subtotal</span><span id="subtotal">Rp0</span></div>
+          <div class="totals-row" id="discRow" style="display:none"><span>Diskon Member</span><span id="discAmt">-Rp0</span></div>
+          <div class="totals-row" id="promoRow" style="display:none"><span id="promoLabel">Promo</span><span id="promoAmt">-Rp0</span></div>
+          <div class="totals-row"><span id="scLabel">Service Charge</span><span id="scAmt">Rp0</span></div>
+          <div class="totals-row"><span>Sudah Dibayar (DP)</span><span id="paidAmt">Rp0</span></div>
+          <div class="totals-row grand"><span>Grand Total (Sisa)</span><span id="grandTotal">Rp0</span></div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h3>Payment Method</h3>
+        <div class="pay-method-grid" id="payMethodGrid">
+          <button class="pay-method-btn active" data-m="cash"></button>
+          <button class="pay-method-btn" data-m="qris"></button>
+          <button class="pay-method-btn" data-m="card"></button>
+        </div>
+
+        <div class="amount-box">
+          <label>Amount Received</label>
+          <div class="row">
+            <span class="currency">IDR</span>
+            <input id="amountReceived" type="number" min="0" />
+          </div>
+        </div>
+        <div class="change-due"><span>Change Due</span><b id="changeDue">Rp0</b></div>
+
+        <div id="payError" class="error-text" style="display:none"></div>
+        <button class="btn btn-primary btn-block" id="btnProcess">Process Payment</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script src="/js/qz-print.js"></script>
+  <script>
+    renderLayout({ active: 'orders', title: 'Checkout' });
+    document.getElementById('backLink').innerHTML = icon('arrowLeft', 14) + ' Kembali';
+
+    // isi ikon tombol metode bayar (dibuat lewat placeholder supaya template literal di atas tetap ringkas)
+    document.querySelectorAll('.pay-method-btn')[0].innerHTML = icon('cash', 22) + '<span>Cash</span>';
+    document.querySelectorAll('.pay-method-btn')[1].innerHTML = icon('qr', 22) + '<span>QRIS</span>';
+    document.querySelectorAll('.pay-method-btn')[2].innerHTML = icon('card', 22) + '<span>Card</span>';
+
+    const transId = new URLSearchParams(location.search).get('id');
+    document.getElementById('backLink').href = `/room-detail.html?id=${transId}`;
+    let grandTotalValue = 0;
+    let selectedMethod = 'cash';
+    // Idempotency key untuk percobaan "Process Payment" yang sedang berjalan
+    // - dipakai ulang kalau di-retry setelah error jaringan (lihat penjelasan
+    // sama di orders.html & diagnosis-sync-issue.md), direset kalau metode
+    // bayar diganti (niat berubah).
+    let pendingRequestKey = null;
+    function requestKeyForSubmit() {
+      if (!pendingRequestKey) pendingRequestKey = newRequestKey();
+      return pendingRequestKey;
+    }
+
+    async function load() {
+      const { trans, details, promos_applied } = await Api.getTrans(transId);
+      document.getElementById('pageTitle').textContent = `Checkout: Room ${trans.room_id}`;
+
+      document.getElementById('summaryBody').innerHTML = details.map((d) => `
+        <tr><td>${d.product_name_snapshot}</td><td>${d.qty}</td><td class="num">${rupiah(d.price)}</td><td class="num">${rupiah(d.subtotal)}</td></tr>
+      `).join('') || '<tr><td colspan="4" style="color:var(--text-faint)">Belum ada item.</td></tr>';
+
+      const totalFnb = details.reduce((s, d) => s + Number(d.subtotal), 0);
+      const memberDisc = Number(trans.member_disc_fnb) + Number(trans.member_disc_room);
+      const promoDisc = Number(trans.promo_disc_fnb || 0);
+      const disc = memberDisc + promoDisc;
+      const afterDisc = totalFnb - disc;
+      const sc = Math.round((afterDisc * Number(trans.service_charge_pct)) / 100);
+      const grand = afterDisc + sc;
+      const sisa = Math.max(0, grand - Number(trans.initial_paid_amount));
+      grandTotalValue = sisa;
+
+      document.getElementById('subtotal').textContent = rupiah(totalFnb);
+      if (memberDisc > 0) {
+        document.getElementById('discRow').style.display = 'flex';
+        document.getElementById('discAmt').textContent = '-' + rupiah(memberDisc);
+      }
+      if (promoDisc > 0) {
+        const names = (promos_applied || []).map((p) => p.promo_name).join(', ');
+        document.getElementById('promoRow').style.display = 'flex';
+        document.getElementById('promoLabel').textContent = names ? `Promo (${names})` : 'Promo';
+        document.getElementById('promoAmt').textContent = '-' + rupiah(promoDisc);
+      }
+      document.getElementById('scLabel').textContent = `Service Charge (${trans.service_charge_pct}%)`;
+      document.getElementById('scAmt').textContent = rupiah(sc);
+      document.getElementById('paidAmt').textContent = rupiah(trans.initial_paid_amount);
+      document.getElementById('grandTotal').textContent = rupiah(sisa);
+      document.getElementById('amountReceived').value = sisa;
+      updateChange();
+    }
+
+    document.querySelectorAll('.pay-method-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.pay-method-btn').forEach((b) => b.classList.remove('active'));
+        btn.classList.add('active');
+        selectedMethod = btn.dataset.m;
+        pendingRequestKey = null; // metode bayar berubah - percobaan submit sebelumnya tidak relevan lagi
+      });
+    });
+
+    document.getElementById('amountReceived').addEventListener('input', updateChange);
+    function updateChange() {
+      const received = Number(document.getElementById('amountReceived').value) || 0;
+      const change = received - grandTotalValue;
+      document.getElementById('changeDue').textContent = rupiah(Math.max(0, change));
+    }
+
+    document.getElementById('btnProcess').addEventListener('click', async () => {
+      const errEl = document.getElementById('payError');
+      errEl.style.display = 'none';
+      const btn = document.getElementById('btnProcess');
+      btn.disabled = true;
+      try {
+        const result = await Api.tutupKamar(transId, selectedMethod, requestKeyForSubmit());
+        for (const job of result.print_jobs) {
+          try {
+            await QzPrint.printJob(job);
+            await Api.ackPrint(job.print_log_id);
+          } catch (printErr) {
+            alert(`Kamar ditutup, tapi cetak tagihan gagal: ${printErr.message}`);
+          }
+        }
+        showToast(`Pembayaran berhasil. Total: ${rupiah(result.grand_total)}`);
+        setTimeout(() => (window.location.href = '/dashboard.html'), 900);
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+        btn.disabled = false;
+      }
+    });
+
+    load();
+  </script>
+</body>
+</html>

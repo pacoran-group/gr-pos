@@ -1,0 +1,23 @@
+# Dependencies
+node_modules/
+
+# Environment - berisi kredensial DB, JWT_SECRET, SMTP. JANGAN di-commit.
+.env
+.env.local
+.env.*.local
+
+# Log runtime service Windows (folder tetap ada via .gitkeep)
+ops/service/logs/*
+!ops/service/logs/.gitkeep
+*.log
+
+# node-windows (di-install --no-save saat setup service)
+ops/service/daemon/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp

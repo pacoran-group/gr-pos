@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Manajemen Produk - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+<style>
+  .prod-toolbar { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 14px; }
+  .prod-toolbar label { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+  .prod-toolbar .field { padding: 7px 9px; }
+  .prod-toolbar .grow { flex: 1; min-width: 180px; }
+  .prod-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .pill { font-size: 10.5px; padding: 2px 8px; border-radius: 10px; font-weight: 700; }
+  .pill.on { background: var(--green-dim); color: var(--green); }
+  .pill.off { background: var(--gray-dim); color: var(--text-muted); }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin: 6px 0 14px; }
+  .form-grid .full { grid-column: 1 / -1; }
+  .form-grid .field { margin: 0; width: 100%; }
+  .chk { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .muted-note { font-size: 11.5px; color: var(--text-muted); }
+</style>
+</head>
+<body>
+  <div id="shell"></div>
+  <div id="pageContent">
+    <div id="gate" style="display:none" class="card">Halaman ini khusus admin / supervisor.</div>
+
+    <div id="main" style="display:none">
+      <div class="card">
+        <div class="prod-toolbar">
+          <div class="grow">
+            <label for="fq">Cari nama</label>
+            <input type="text" id="fq" class="field" placeholder="mis. jus, kentucky…" />
+          </div>
+          <div>
+            <label for="fcat">Kategori</label>
+            <select id="fcat" class="field"><option value="">Semua</option></select>
+          </div>
+          <div>
+            <label for="fstat">Status</label>
+            <select id="fstat" class="field">
+              <option value="all">Semua</option>
+              <option value="active">Aktif</option>
+              <option value="inactive">Nonaktif</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" id="btnNew">+ Produk Baru</button>
+        </div>
+        <div id="listWrap" style="overflow-x:auto"><p class="muted-note">Memuat…</p></div>
+        <p class="muted-note" id="countNote"></p>
+      </div>
+    </div>
+    <div id="modalMount"></div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script>
+    renderLayout({ active: 'products', title: 'Manajemen Produk', subtitle: 'Katalog F&B' });
+
+    const canManage = ['admin', 'supervisor'].includes((getUser() || {}).role);
+    const modalMount = document.getElementById('modalMount');
+    const rp = (n) => 'Rp' + Number(n || 0).toLocaleString('id-ID');
+    const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+
+    let allCategories = [];
+    let debounce;
+
+    function closeModal() { modalMount.innerHTML = ''; }
+    modalMount.addEventListener('click', (e) => { if (e.target === modalMount.firstElementChild) closeModal(); });
+
+    async function load() {
+      const params = {
+        q: document.getElementById('fq').value.trim(),
+        category: document.getElementById('fcat').value,
+        status: document.getElementById('fstat').value,
+      };
+      try {
+        const { products, categories } = await Api.listManagedProducts(params);
+        allCategories = categories || [];
+        syncCatFilter();
+        renderList(products);
+      } catch (err) {
+        if (err.status === 403) { gate(); return; }
+        document.getElementById('listWrap').innerHTML =
+          `<p class="error-text" style="display:block">${esc(err.message)}</p>`;
+      }
+    }
+
+    function syncCatFilter() {
+      const sel = document.getElementById('fcat');
+      const cur = sel.value;
+      sel.innerHTML = '<option value="">Semua</option>' +
+        allCategories.map((c) => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+      sel.value = cur;
+    }
+
+    function renderList(rows) {
+      const wrap = document.getElementById('listWrap');
+      if (!rows.length) { wrap.innerHTML = '<p class="muted-note">Tidak ada produk cocok filter.</p>'; document.getElementById('countNote').textContent = ''; return; }
+      wrap.innerHTML = `<table class="summary-table prod-table">
+        <thead><tr>
+          <th>Nama</th><th>Kategori</th><th class="num">Harga Jual</th>
+          <th class="num">Harga Modal</th><th>Satuan</th><th>Status</th><th></th>
+        </tr></thead>
+        <tbody>${rows.map((r) => `
+          <tr>
+            <td>${esc(r.prod_desc)}</td>
+            <td>${esc(r.category)}</td>
+            <td class="num">${rp(r.harga_jual)}</td>
+            <td class="num">${rp(r.harga_mdl)}</td>
+            <td>${esc(r.satuan) || '—'}</td>
+            <td><span class="pill ${String(r.is_active).toUpperCase() === 'TRUE' ? 'on' : 'off'}">${String(r.is_active).toUpperCase() === 'TRUE' ? 'Aktif' : 'Nonaktif'}</span></td>
+            <td><button class="btn btn-outline" style="padding:4px 10px;font-size:11px"
+                 data-edit='${esc(JSON.stringify(r))}'>Edit</button></td>
+          </tr>`).join('')}</tbody></table>`;
+      document.getElementById('countNote').textContent = `${rows.length} produk`;
+      wrap.querySelectorAll('button[data-edit]').forEach((b) => {
+        b.addEventListener('click', () => openForm(JSON.parse(b.dataset.edit)));
+      });
+    }
+
+    function openForm(p) {
+      const isEdit = !!p;
+      const v = p || { prod_desc: '', category: '', harga_jual: '', harga_mdl: '', satuan: '', is_active: 'TRUE' };
+      const dl = allCategories.map((c) => `<option value="${esc(c)}"></option>`).join('');
+      modalMount.innerHTML = `
+        <div class="modal-overlay"><div class="modal-box card">
+          <h3>${isEdit ? 'Edit Produk' : 'Produk Baru'}</h3>
+          ${isEdit ? `<p class="muted">ID #${esc(v.prod_id)}</p>` : ''}
+          <div id="formErr" class="error-text" style="display:none"></div>
+          <div class="form-grid">
+            <div class="full"><label class="field-label">Nama produk</label>
+              <input class="field" id="f_desc" value="${esc(v.prod_desc)}" /></div>
+            <div class="full"><label class="field-label">Kategori</label>
+              <input class="field" id="f_cat" list="catList" value="${esc(v.category)}" placeholder="MAKANAN / MINUMAN / ROKOK / LAINNYA" />
+              <datalist id="catList">${dl}</datalist></div>
+            <div><label class="field-label">Harga jual (Rp)</label>
+              <input class="field" id="f_jual" type="number" min="0" step="500" value="${esc(v.harga_jual)}" /></div>
+            <div><label class="field-label">Harga modal (Rp)</label>
+              <input class="field" id="f_mdl" type="number" min="0" step="500" value="${esc(v.harga_mdl)}" /></div>
+            <div><label class="field-label">Satuan (opsional)</label>
+              <input class="field" id="f_satuan" maxlength="15" value="${esc(v.satuan)}" placeholder="pcs / btl / porsi" /></div>
+            <div><label class="field-label">Status</label>
+              <label class="chk" style="margin-top:8px"><input type="checkbox" id="f_active" ${String(v.is_active).toUpperCase() === 'TRUE' ? 'checked' : ''} /> Aktif (tampil di katalog kasir)</label></div>
+          </div>
+          <button class="btn btn-primary btn-block" id="f_save">${isEdit ? 'Simpan Perubahan' : 'Tambah Produk'}</button>
+          <button class="btn btn-outline btn-block" id="f_cancel" style="margin-top:8px">Batal</button>
+        </div></div>`;
+      document.getElementById('f_cancel').addEventListener('click', closeModal);
+      document.getElementById('f_save').addEventListener('click', () => submitForm(isEdit ? v.prod_id : null));
+    }
+
+    async function submitForm(editId) {
+      const body = {
+        prod_desc: document.getElementById('f_desc').value.trim(),
+        category: document.getElementById('f_cat').value.trim(),
+        harga_jual: document.getElementById('f_jual').value,
+        harga_mdl: document.getElementById('f_mdl').value,
+        satuan: document.getElementById('f_satuan').value.trim(),
+        is_active: document.getElementById('f_active').checked ? 'TRUE' : 'FALSE',
+      };
+      const errEl = document.getElementById('formErr');
+      const btn = document.getElementById('f_save');
+      errEl.style.display = 'none';
+      btn.disabled = true;
+      try {
+        if (editId) await Api.updateProduct(editId, body);
+        else await Api.createProduct(body);
+        closeModal();
+        showToast(editId ? 'Produk diperbarui.' : 'Produk ditambahkan.');
+        load();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+        btn.disabled = false;
+      }
+    }
+
+    function gate() {
+      document.getElementById('main').style.display = 'none';
+      document.getElementById('gate').style.display = 'block';
+    }
+
+    if (!canManage) {
+      gate();
+    } else {
+      document.getElementById('main').style.display = 'block';
+      document.getElementById('btnNew').addEventListener('click', () => openForm(null));
+      document.getElementById('fq').addEventListener('input', () => { clearTimeout(debounce); debounce = setTimeout(load, 200); });
+      document.getElementById('fcat').addEventListener('change', load);
+      document.getElementById('fstat').addEventListener('change', load);
+      load();
+    }
+  </script>
+</body>
+</html>

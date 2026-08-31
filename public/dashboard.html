@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Dashboard - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+</head>
+<body>
+  <div id="shell"></div>
+
+  <div id="pageContent">
+    <div id="orphanBanner" style="display:none;margin-bottom:14px;padding:10px 14px;border-radius:10px;
+      background:rgba(255,209,102,0.12);border:1px solid var(--yellow);color:var(--yellow);font-size:12.5px"></div>
+    <div class="stats-row">
+
+      <div>
+        <div class="total" id="totalRooms">-</div>
+        <div class="total-label">Total Rooms</div>
+      </div>
+      <div class="legend-chip"><span class="dot" style="background:var(--green)"></span>Available <b id="cntAvailable">0</b></div>
+      <div class="legend-chip"><span class="dot" style="background:var(--pink)"></span>Occupied <b id="cntOccupied">0</b></div>
+      <div class="legend-chip"><span class="dot" style="background:var(--yellow)"></span>Diproses Terminal Lain <b id="cntLocked">0</b></div>
+      <div class="legend-chip"><span class="dot" style="background:var(--gray)"></span>Maintenance <b id="cntMaintenance">0</b></div>
+      <div class="legend-chip"><span class="dot" style="background:var(--purple)"></span>Sistem Lama <b id="cntLegacy">0</b></div>
+      <div class="legend-chip"><span class="dot" style="background:var(--yellow)"></span>10 Menit Terakhir <b id="cntEndingSoon">0</b></div>
+    </div>
+    <div class="room-grid" id="roomGrid"></div>
+  </div>
+
+  <div id="popupContainer"></div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script>
+    renderLayout({ active: 'dashboard', title: 'Room Monitor', subtitle: 'Status kamar real-time' });
+
+    function classify(r) {
+      if (r.is_maintenance) return 'maintenance';
+      if (r.soft_lock) return 'locked';
+      if (r.active_trans) return 'occupied';
+      if (r.legacy_active) return 'legacy';
+      return 'available';
+    }
+
+    async function loadRooms() {
+      try {
+        const { rooms } = await Api.getRooms();
+        const counts = { available: 0, occupied: 0, locked: 0, maintenance: 0, legacy: 0 };
+        let endingSoonCount = 0;
+        const grid = document.getElementById('roomGrid');
+        grid.innerHTML = '';
+        for (const r of rooms) {
+          const cls = classify(r);
+          counts[cls]++;
+          const card = document.createElement('div');
+          card.className = `room-card status-${cls}`;
+          let body = `
+            <div class="top-row">
+              <div>
+                <div class="room-code">${r.room_name}</div>
+                <div class="room-type">${r.room_type}</div>
+              </div>
+              <div class="status-dot status-${cls}"></div>
+            </div>`;
+          if (cls === 'occupied') {
+            const at = r.active_trans;
+            if (at.is_test) {
+              body += `<div class="lock-note" style="color:#d97706;font-weight:600">🧪 MODE TEST — bukan tamu sungguhan</div>`;
+            }
+            const cd = at.expires_at ? formatCountdown(at.expires_at) : { text: formatDuration(at.start_time), overtime: false };
+            body += `<div class="timer${cd.overtime ? ' overtime' : ''}" data-expires="${at.expires_at || ''}">${cd.text}</div>`;
+            body += `<div class="guests">${icon('users', 13)} ${at.person || 0} tamu · ${at.cust_name}</div>`;
+            // Peringatan visual 10 menit terakhir: kasir pastikan semua bill
+            // LUNAS, security cek kondisi ruangan sebelum tamu pergi.
+            if (!at.is_test && at.expires_at) {
+              const phase = timePhase(at.expires_at);
+              if (phase) { card.classList.add(phase); endingSoonCount++; card.dataset.expires = at.expires_at; }
+              if (phase === 'ending-soon') {
+                body += `<div class="lock-note ending-note">⏱ 10 menit terakhir — pastikan semua bill LUNAS &amp; cek kondisi ruangan</div>`;
+              } else if (phase === 'time-over') {
+                body += `<div class="lock-note ending-note" style="color:var(--red)">⏰ Waktu habis — checkout / perpanjangan</div>`;
+              }
+            }
+            body += `<button class="cta">${at.is_test ? 'Kelola (Test)' : 'Kelola Order'}</button>`;
+            // Notifikasi sekali saat waktu sebuah kamar habis.
+            if (!at.is_test && at.expires_at && new Date(at.expires_at) <= new Date() && !timeUpShown.has(at.trans_id)) {
+              timeUpShown.add(at.trans_id);
+              showTimeUpPopup(r.room_name);
+            }
+          } else if (cls === 'locked') {
+            body += `<div class="lock-note">Diproses oleh ${r.soft_lock.locked_by}<br/>(${r.soft_lock.terminal_id})</div>`;
+            body += `<button class="cta">Sedang Diproses</button>`;
+          } else if (cls === 'maintenance') {
+            body += `<div class="lock-note" style="color:var(--gray)">${r.maintenance_reason || 'Maintenance'}</div>`;
+            body += `<button class="cta">Maintenance</button>`;
+          } else if (cls === 'legacy') {
+            body += `<div class="lock-note" style="color:var(--purple)">Terpakai — sistem lama (154)</div>`;
+            body += `<button class="cta">Dikelola Sistem Lama</button>`;
+          } else {
+            body += `<button class="cta">Book Room</button>`;
+          }
+          card.innerHTML = body;
+          card.addEventListener('click', () => onRoomClick(r, cls));
+          grid.appendChild(card);
+        }
+        document.getElementById('totalRooms').textContent = rooms.length;
+        document.getElementById('cntAvailable').textContent = counts.available;
+        document.getElementById('cntOccupied').textContent = counts.occupied;
+        document.getElementById('cntLocked').textContent = counts.locked;
+        document.getElementById('cntMaintenance').textContent = counts.maintenance;
+        document.getElementById('cntLegacy').textContent = counts.legacy;
+        document.getElementById('cntEndingSoon').textContent = endingSoonCount;
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    function onRoomClick(room, cls) {
+      if (cls === 'maintenance' || cls === 'locked' || cls === 'legacy') return;
+      if (cls === 'occupied') {
+        window.location.href = `/room-detail.html?id=${room.active_trans.trans_id}`;
+      } else {
+        window.location.href = `/orders.html?room_id=${room.room_id}`;
+      }
+    }
+
+    // Notifikasi "waktu habis" - satu kali per transaksi.
+    const timeUpShown = new Set();
+    function showTimeUpPopup(roomName) {
+      const wrap = document.createElement('div');
+      wrap.className = 'popup-overlay';
+      wrap.innerHTML = `<div class="popup-box"><h2 style="color:var(--red)">⏰ Waktu Habis</h2>
+        <p>Waktu karaoke <b>${roomName}</b> sudah habis. Konfirmasi ke tamu / proses perpanjangan atau checkout.</p>
+        <button class="btn btn-primary">OK</button></div>`;
+      wrap.querySelector('button').addEventListener('click', () => wrap.remove());
+      document.getElementById('popupContainer').appendChild(wrap);
+    }
+
+    // Fase waktu kamar untuk penandaan visual:
+    //   null         -> lebih dari 10 menit tersisa
+    //   'ending-soon' -> <= 10 menit tersisa (kuning, berkedip)
+    //   'time-over'   -> waktu sudah lewat (merah)
+    const ENDING_SOON_MIN = 10;
+    function timePhase(expiresIso) {
+      const diffMin = (new Date(expiresIso).getTime() - Date.now()) / 60000;
+      if (diffMin <= 0) return 'time-over';
+      if (diffMin <= ENDING_SOON_MIN) return 'ending-soon';
+      return null;
+    }
+
+    // Tick hitung mundur tiap detik tanpa fetch ulang (loadRooms hanya tiap 4s).
+    function tickTimers() {
+      document.querySelectorAll('#roomGrid .timer[data-expires]').forEach((el) => {
+        if (!el.dataset.expires) return;
+        const { text, overtime } = formatCountdown(el.dataset.expires);
+        el.textContent = text;
+        el.classList.toggle('overtime', overtime);
+      });
+      // Kartu: perbarui penandaan fase (10 menit terakhir / lewat) tiap detik
+      // supaya transisinya tidak menunggu refresh 4 detik.
+      document.querySelectorAll('#roomGrid .room-card[data-expires]').forEach((card) => {
+        if (!card.dataset.expires) return;
+        const phase = timePhase(card.dataset.expires);
+        card.classList.toggle('ending-soon', phase === 'ending-soon');
+        card.classList.toggle('time-over', phase === 'time-over');
+      });
+    }
+
+    loadRooms();
+    setInterval(loadRooms, 4000);
+    setInterval(tickTimers, 1000);
+
+    // --- Notifikasi Pesanan Siap (pop-up) ---
+    const shownNotifIds = new Set();
+    async function pollPesananSiap() {
+      try {
+        const { notifications } = await Api.getPesananSiapNotif();
+        for (const n of notifications) {
+          if (shownNotifIds.has(n.id)) continue;
+          shownNotifIds.add(n.id);
+          const wrap = document.createElement('div');
+          wrap.className = 'popup-overlay';
+          wrap.innerHTML = `<div class="popup-box"><h2>🔔 Pesanan Siap!</h2><p>${n.message}</p>
+            <button class="btn btn-primary" id="ackBtn-${n.id}">OK, sudah dilihat</button></div>`;
+          document.getElementById('popupContainer').appendChild(wrap);
+          document.getElementById(`ackBtn-${n.id}`).addEventListener('click', async () => {
+            wrap.remove();
+            try { await Api.ackPesananSiap(n.id); } catch (e) { console.error(e); }
+          });
+        }
+      } catch (err) { console.error(err); }
+    }
+    setInterval(pollPesananSiap, 3000);
+    pollPesananSiap();
+
+    // --- Panel room "orphan": aktif di server lama (154) tapi gr-pos tak
+    // punya transaksinya. Biasanya = ditangani aplikasi lama saat operasi
+    // paralel / Plan B (gr-pos sempat mati). Perlu rekonsiliasi manual. ---
+    async function pollOrphans() {
+      const role = (getUser() || {}).role;
+      if (!['admin', 'supervisor'].includes(role)) return;
+      try {
+        const { orphans, last_poll } = await Api.getLegacyRooms();
+        const el = document.getElementById('orphanBanner');
+        if (orphans && orphans.length) {
+          const ids = orphans.map((o) => o.room_id).join(', ');
+          el.textContent = `⚠️ Room aktif di sistem lama tapi tidak tercatat di gr-pos: ${ids}. ` +
+            `Kemungkinan ditangani aplikasi lama — rekonsiliasi transaksinya secara manual.`;
+          el.style.display = 'block';
+        } else if (last_poll && last_poll.error) {
+          el.textContent = `ℹ️ Tidak bisa membaca status room dari server lama (154): ${last_poll.error}`;
+          el.style.display = 'block';
+        } else {
+          el.style.display = 'none';
+        }
+      } catch (err) { console.error(err); }
+    }
+    setInterval(pollOrphans, 20000);
+    pollOrphans();
+  </script>
+</body>
+</html>

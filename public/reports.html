@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Laporan - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+<style>
+  .rep-toolbar { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 16px; }
+  .rep-toolbar label { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+  .rep-toolbar input[type="date"] { padding: 7px 9px; }
+  .rep-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .rep-card { background: var(--card, #fff); border: 1px solid var(--border, #e5e5e5); border-radius: 10px; padding: 12px 14px; }
+  .rep-card .k { font-size: 11px; color: var(--text-muted); }
+  .rep-card .v { font-size: 18px; font-weight: 700; margin-top: 3px; }
+  .rep-card .v.warn { color: var(--red); }
+  .rep-sec h4 { margin: 18px 0 6px; font-size: 13px; }
+  .rep-warn { font-size: 12.5px; margin: 10px 0 4px; }
+  .rep-warn .bad { color: var(--red); font-weight: 700; }
+  #repWrap table { margin-bottom: 6px; }
+  .rep-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 20px; }
+  .muted-note { font-size: 11.5px; color: var(--text-muted); }
+</style>
+</head>
+<body>
+  <div id="shell"></div>
+  <div id="pageContent">
+    <div id="repGate" style="display:none" class="card">Halaman ini khusus admin / supervisor.</div>
+
+    <div id="repMain" style="display:none">
+      <div class="card">
+        <div class="rep-toolbar">
+          <div>
+            <label for="repDate">Tanggal usaha</label>
+            <input type="date" id="repDate" class="field" />
+          </div>
+          <button class="btn btn-primary" id="btnShow">Tampilkan</button>
+          <span class="muted-note" id="repRange"></span>
+        </div>
+
+        <div id="repWrap"><p class="muted-note">Pilih tanggal lalu tekan Tampilkan.</p></div>
+
+        <div class="rep-actions" id="repActions" style="display:none">
+          <button class="btn btn-outline" id="btnCsv">Unduh CSV</button>
+          <button class="btn btn-primary" id="btnClose">Tutup Hari &amp; Kirim Email</button>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <h3 style="margin:0 0 8px">Riwayat Tutup Hari</h3>
+        <div id="repHistory" style="overflow-x:auto"><p class="muted-note">Memuat…</p></div>
+      </div>
+    </div>
+
+    <div id="modalMount"></div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script>
+    renderLayout({ active: 'reports', title: 'Laporan', subtitle: 'Tutup Hari' });
+
+    const canClose = ['admin', 'supervisor'].includes((getUser() || {}).role);
+    const modalMount = document.getElementById('modalMount');
+    function closeModal() { modalMount.innerHTML = ''; }
+    modalMount.addEventListener('click', (e) => { if (e.target === modalMount.firstElementChild) closeModal(); });
+
+    let lastReport = null;
+    let lastMeta = null; // { recipients, cc, smtp_configured }
+    let historyDates = new Set();
+
+    function rp(n) { return 'Rp' + Number(n || 0).toLocaleString('id-ID'); }
+    function escHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function tbl(headers, rows) {
+      const th = headers.map((h) => `<th>${h}</th>`).join('');
+      const body = rows.length
+        ? rows.map((r) => '<tr>' + r.map((c, i) => `<td class="${i ? 'num' : ''}">${c}</td>`).join('') + '</tr>').join('')
+        : `<tr><td colspan="${headers.length}" class="muted-note">— tidak ada data —</td></tr>`;
+      return `<div style="overflow-x:auto"><table class="summary-table"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`;
+    }
+
+    function localDateStr(d) {
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    function todayBusinessDate() {
+      // Fallback saja - nilai sebenarnya diisi dari report.business_date server.
+      const cutoff = (lastReport && lastReport.eod_cutoff_hour) || 5;
+      const d = new Date();
+      if (d.getHours() < cutoff) d.setDate(d.getDate() - 1);
+      return localDateStr(d);
+    }
+
+    function renderReport(r) {
+      lastReport = r;
+      const s = r.summary;
+      // Sinkronkan date-picker dengan tanggal usaha yang benar-benar dihitung server.
+      if (r.business_date && document.getElementById('repDate').value !== r.business_date) {
+        document.getElementById('repDate').value = r.business_date;
+      }
+      document.getElementById('repRange').textContent = `${r.range_start} s/d ${r.range_end} WIB · cutoff ${r.eod_cutoff_hour}:00`;
+
+      const cards = [
+        ['Pendapatan', rp(s.net_revenue), false],
+        ['Transaksi', Number(s.closed_count).toLocaleString('id-ID'), false],
+        ['F&B bruto', rp(s.fnb_gross), false],
+        ['Service charge', rp(s.service_charge_total), false],
+        ['Diskon', '-' + rp(s.disc_total), false],
+        ['Terkumpul', rp(s.collected_total), false],
+        ['Selisih terkumpul', rp(s.collected_vs_grand_gap), s.collected_vs_grand_gap !== 0],
+      ].map(([k, v, warn]) => `<div class="rep-card"><div class="k">${k}</div><div class="v ${warn ? 'warn' : ''}">${v}</div></div>`).join('');
+
+      const pay = tbl(['Metode', 'Transaksi', 'Nilai'],
+        r.payment_mix.map((p) => [escHtml(p.method), Number(p.txn_count).toLocaleString('id-ID'), rp(p.amount)]));
+
+      const cashier = tbl(['Kasir', 'Transaksi', 'Pendapatan', 'Tunai', 'QRIS', 'Kartu', 'Lainnya'],
+        r.by_cashier.map((c) => [escHtml(c.cashier), Number(c.count).toLocaleString('id-ID'), rp(c.grand_total),
+          rp(c.methods.tunai), rp(c.methods.qris), rp(c.methods.kartu), rp(c.methods.lainnya)]));
+
+      const roomType = tbl(['Tipe kamar', 'Transaksi', 'F&B bruto', 'Service charge', 'Pendapatan'],
+        r.by_room_type.map((x) => [escHtml(x.room_type), Number(x.count).toLocaleString('id-ID'),
+          rp(x.fnb_gross), rp(x.service_charge), rp(x.grand_total)]));
+
+      const top = tbl(['Produk', 'Qty', 'Nilai'],
+        r.top_products.map((p) => [escHtml(p.name), Number(p.qty).toLocaleString('id-ID'), rp(p.value)]));
+
+      const warn = `
+        <div class="rep-warn">
+          Void: ${Number(r.voids.count).toLocaleString('id-ID')} item · ${rp(r.voids.total)} &nbsp;·&nbsp;
+          Dibatalkan: ${Number(r.cancelled_count).toLocaleString('id-ID')} &nbsp;·&nbsp;
+          <span class="${r.active_open_count ? 'bad' : ''}">Kamar masih aktif: ${Number(r.active_open_count).toLocaleString('id-ID')}${
+            r.active_open_oldest_start ? ` (terlama sejak ${escHtml(r.active_open_oldest_start)})` : ''}</span>
+        </div>
+        ${r.data_quality ? `<div class="rep-warn bad">Catatan data: ${r.data_quality.unknown_settlement_method_txns} transaksi punya pelunasan tanpa metode bayar tercatat.</div>` : ''}`;
+
+      document.getElementById('repWrap').innerHTML =
+        `<div class="rep-cards">${cards}</div>${warn}
+         <div class="rep-sec"><h4>Rincian penerimaan per metode</h4>${pay}</div>
+         <div class="rep-sec"><h4>Per kasir</h4>${cashier}</div>
+         <div class="rep-sec"><h4>Per tipe kamar</h4>${roomType}</div>
+         <div class="rep-sec"><h4>Produk terlaris</h4>${top}</div>`;
+
+      document.getElementById('repActions').style.display = canClose ? 'flex' : 'none';
+    }
+
+    async function show() {
+      const date = document.getElementById('repDate').value;
+      if (!date) { showToast('Pilih tanggal dulu.', 'error'); return; }
+      const btn = document.getElementById('btnShow');
+      btn.disabled = true;
+      try {
+        const resp = await Api.getDailyReport(date);
+        lastMeta = { recipients: resp.recipients, cc: resp.cc, smtp_configured: resp.smtp_configured };
+        renderReport(resp.report);
+      } catch (err) {
+        if (err.status === 403) { gate(); return; }
+        showToast('Gagal memuat laporan: ' + err.message, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function gate() {
+      document.getElementById('repMain').style.display = 'none';
+      document.getElementById('repGate').style.display = 'block';
+    }
+
+    // --- Modal Tutup Hari ---
+    function openCloseModal() {
+      const date = document.getElementById('repDate').value;
+      const r = lastReport;
+      const recips = (lastMeta && lastMeta.recipients) || [];
+      const smtpOk = lastMeta && lastMeta.smtp_configured;
+      const already = historyDates.has(date);
+      const activeWarn = r && r.active_open_count > 0;
+
+      modalMount.innerHTML = `
+        <div class="modal-overlay">
+          <div class="modal-box card">
+            <h3>Tutup Hari — ${escHtml(date)}</h3>
+            <p class="muted">Pendapatan ${rp(r ? r.summary.net_revenue : 0)} · ${r ? r.summary.closed_count : 0} transaksi.</p>
+            ${smtpOk
+              ? `<p style="font-size:12px">Email dikirim ke: <b>${recips.map(escHtml).join(', ') || '(kosong)'}</b></p>`
+              : `<p class="error-text" style="display:block">SMTP / penerima belum dikonfigurasi di .env — laporan tetap disimpan tapi <b>tidak</b> terkirim.</p>`}
+            ${activeWarn ? `<p class="error-text" style="display:block">${r.active_open_count} kamar masih aktif — sebaiknya tutup dulu semua kamar.</p>` : ''}
+            ${already ? `<p class="error-text" style="display:block">Tanggal ini sudah pernah ditutup — aksi ini membuat versi baru &amp; mengirim ulang.</p>` : ''}
+            <div id="closeErr" class="error-text" style="display:none"></div>
+            <button class="btn btn-primary btn-block" id="closeSubmit">${smtpOk ? 'Simpan &amp; Kirim Email' : 'Simpan (tanpa email)'}</button>
+            <button class="btn btn-outline btn-block" id="closeCancel" style="margin-top:8px">Batal</button>
+          </div>
+        </div>`;
+      document.getElementById('closeCancel').addEventListener('click', closeModal);
+      document.getElementById('closeSubmit').addEventListener('click', async () => {
+        const b = document.getElementById('closeSubmit');
+        const errEl = document.getElementById('closeErr');
+        errEl.style.display = 'none';
+        b.disabled = true;
+        try {
+          const res = await Api.closeDaily(date, !!smtpOk);
+          closeModal();
+          if (res.emailed) showToast('Tutup Hari tersimpan & email terkirim.');
+          else if (res.email_error) showToast('Tersimpan, tapi email GAGAL: ' + res.email_error, 'error');
+          else showToast('Tutup Hari tersimpan (versi ' + (res.daily_close ? res.daily_close.version : '?') + ').');
+          renderReport(res.report);
+          await loadHistory();
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.style.display = 'block';
+          b.disabled = false;
+        }
+      });
+    }
+
+    // --- Riwayat ---
+    async function loadHistory() {
+      try {
+        const { history } = await Api.getDailyHistory(60);
+        historyDates = new Set(history.map((h) => String(h.business_date).slice(0, 10)));
+        const el = document.getElementById('repHistory');
+        if (!history.length) { el.innerHTML = '<p class="muted-note">Belum ada Tutup Hari tersimpan.</p>'; return; }
+        el.innerHTML = `<table class="summary-table">
+          <thead><tr><th>Tanggal</th><th class="num">Versi</th><th>Dibuat</th><th class="num">Baris CSV</th><th>Email</th><th></th></tr></thead>
+          <tbody>${history.map((h) => {
+            const bd = String(h.business_date).slice(0, 10);
+            const emailCell = h.email_error
+              ? `<span style="color:var(--red)">gagal: ${escHtml(h.email_error).slice(0, 60)}</span>`
+              : (h.emailed_at ? escHtml(String(h.emailed_at)) : '—');
+            return `<tr>
+              <td>${escHtml(bd)}</td>
+              <td class="num">${h.version}</td>
+              <td>${escHtml(String(h.generated_at))}${h.generated_by_name ? ' · ' + escHtml(h.generated_by_name) : ''}</td>
+              <td class="num">${h.csv_row_count}</td>
+              <td>${emailCell}</td>
+              <td>
+                <button class="btn btn-outline" data-act="view" data-bd="${bd}" style="padding:4px 9px;font-size:11px">Lihat</button>
+                <button class="btn btn-outline" data-act="csv" data-bd="${bd}" style="padding:4px 9px;font-size:11px">CSV</button>
+                ${canClose ? `<button class="btn btn-outline" data-act="resend" data-bd="${bd}" style="padding:4px 9px;font-size:11px">Kirim Ulang</button>` : ''}
+              </td>
+            </tr>`;
+          }).join('')}</tbody></table>`;
+        el.querySelectorAll('button[data-act]').forEach((b) => {
+          b.addEventListener('click', () => histAction(b.dataset.act, b.dataset.bd, b));
+        });
+      } catch (err) {
+        if (err.status === 403) { gate(); return; }
+        document.getElementById('repHistory').innerHTML = `<p class="error-text" style="display:block">${escHtml(err.message)}</p>`;
+      }
+    }
+
+    async function histAction(act, bd, btn) {
+      try {
+        if (act === 'view') {
+          const { report } = await Api.getStoredDailyClose(bd);
+          document.getElementById('repDate').value = bd;
+          renderReport(report);
+          document.getElementById('repActions').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else if (act === 'csv') {
+          await Api.downloadDailyCsv(bd, true);
+        } else if (act === 'resend') {
+          btn.disabled = true;
+          const res = await Api.resendDailyClose(bd);
+          if (res.emailed) showToast('Email terkirim ulang.');
+          else showToast('Kirim ulang GAGAL: ' + (res.email_error || 'tidak diketahui'), 'error');
+          await loadHistory();
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    // --- init ---
+    if (!canClose) {
+      // Non admin/supervisor: endpoint 403, tampilkan gate.
+      gate();
+    } else {
+      document.getElementById('repMain').style.display = 'block';
+      document.getElementById('repDate').value = todayBusinessDate();
+      document.getElementById('btnShow').addEventListener('click', show);
+      document.getElementById('btnCsv').addEventListener('click', async () => {
+        try { await Api.downloadDailyCsv(document.getElementById('repDate').value); }
+        catch (err) { showToast(err.message, 'error'); }
+      });
+      document.getElementById('btnClose').addEventListener('click', openCloseModal);
+      show();
+      loadHistory();
+    }
+  </script>
+</body>
+</html>

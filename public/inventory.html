@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Inventory - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+<style>
+  /* Badge status stok - pakai var warna yang sudah ada di theme.css */
+  .stk-pill { padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+  .stk-ok { background: var(--green-dim); color: var(--green); }
+  .stk-low { background: rgba(255, 209, 102, 0.15); color: var(--yellow); }
+  .stk-neg { background: rgba(255, 92, 122, 0.15); color: var(--red); }
+  .inv-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+  .inv-toolbar label { font-size: 12px; font-weight: 400; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+  .inv-actions { display: flex; gap: 6px; justify-content: flex-end; }
+  .inv-actions .btn { padding: 5px 10px; font-size: 11.5px; }
+  #invWrap { overflow-x: auto; }
+  #invMeta { font-size: 12px; color: var(--text-muted); margin-top: 10px; }
+</style>
+</head>
+<body>
+  <div id="shell"></div>
+  <div id="pageContent">
+    <div class="card">
+      <div class="inv-toolbar">
+        <h3 style="margin:0">Stok Produk <small>Sub-gudang unit ini. Semua produk aktif; stok awal 0 sampai diinput.</small></h3>
+        <label><input type="checkbox" id="lowOnly" /> Hanya stok menipis / minus</label>
+      </div>
+      <div id="invWrap">
+        <table class="summary-table">
+          <thead>
+            <tr>
+              <th>Produk</th><th>Kategori</th><th class="num">Harga</th>
+              <th class="num">Stok</th><th class="num">Min</th><th>Status</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="invBody"></tbody>
+        </table>
+      </div>
+      <div id="invMeta"></div>
+    </div>
+    <div id="modalMount"></div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script>
+    renderLayout({
+      active: 'inventory',
+      title: 'Inventory',
+      subtitle: 'Stok produk',
+      onSearch: (q) => { filterTerm = q; renderTable(); },
+    });
+
+    const canEdit = ['admin', 'supervisor', 'gudang'].includes((getUser() || {}).role);
+    const modalMount = document.getElementById('modalMount');
+    function closeModal() { modalMount.innerHTML = ''; }
+    modalMount.addEventListener('click', (e) => { if (e.target === modalMount.firstElementChild) closeModal(); });
+
+    let allItems = [];
+    let filterTerm = '';
+
+    async function load() {
+      try {
+        const { items } = await Api.listInventory();
+        allItems = items;
+        renderTable();
+      } catch (err) {
+        showToast('Gagal memuat stok: ' + err.message, 'error');
+      }
+    }
+
+    function statusPill(it) {
+      if (Number(it.qty_on_hand) < 0) return '<span class="stk-pill stk-neg">MINUS</span>';
+      if (it.low) return '<span class="stk-pill stk-low">MENIPIS</span>';
+      return '<span class="stk-pill stk-ok">AMAN</span>';
+    }
+
+    function renderTable() {
+      const term = (filterTerm || '').toLowerCase();
+      const lowOnly = document.getElementById('lowOnly').checked;
+      const rows = allItems.filter((it) => {
+        if (lowOnly && !(it.low || Number(it.qty_on_hand) < 0)) return false;
+        if (term && !(it.product_name || '').toLowerCase().includes(term)) return false;
+        return true;
+      });
+
+      const body = document.getElementById('invBody');
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="7" style="color:var(--text-muted);padding:16px 4px">Tidak ada produk yang cocok.</td></tr>';
+      } else {
+        body.innerHTML = rows.map((it) => {
+          const actions = canEdit
+            ? `<div class="inv-actions">
+                 <button class="btn btn-primary" data-act="restock" data-id="${it.product_id}" data-name="${escAttr(it.product_name)}">Barang Masuk</button>
+                 <button class="btn btn-outline" data-act="adjust" data-id="${it.product_id}" data-name="${escAttr(it.product_name)}" data-qty="${it.qty_on_hand}">Sesuaikan</button>
+                 <button class="btn btn-outline" data-act="hist" data-id="${it.product_id}" data-name="${escAttr(it.product_name)}">Riwayat</button>
+               </div>`
+            : `<div class="inv-actions">
+                 <button class="btn btn-outline" data-act="hist" data-id="${it.product_id}" data-name="${escAttr(it.product_name)}">Riwayat</button>
+               </div>`;
+          return `<tr>
+            <td>${escHtml(it.product_name)}</td>
+            <td>${escHtml(it.category || '-')}</td>
+            <td class="num">${rupiah(it.price)}</td>
+            <td class="num"><b>${it.qty_on_hand}</b>${it.unit ? ' ' + escHtml(it.unit) : ''}</td>
+            <td class="num">${it.min_stock}</td>
+            <td>${statusPill(it)}</td>
+            <td>${actions}</td>
+          </tr>`;
+        }).join('');
+      }
+
+      const neg = allItems.filter((it) => Number(it.qty_on_hand) < 0).length;
+      const low = allItems.filter((it) => it.low && Number(it.qty_on_hand) >= 0).length;
+      document.getElementById('invMeta').textContent =
+        `${allItems.length} produk aktif · ${neg} minus · ${low} menipis` +
+        (canEdit ? '' : ' · Anda hanya bisa melihat (input stok: admin/head/gudang).');
+
+      body.querySelectorAll('button[data-act]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const { act, id, name, qty } = btn.dataset;
+          if (act === 'restock') openRestockModal({ id, name });
+          else if (act === 'adjust') openAdjustModal({ id, name, qty });
+          else openMovementsModal({ id, name });
+        });
+      });
+    }
+
+    document.getElementById('lowOnly').addEventListener('change', renderTable);
+
+    // ---------------------------------------------------------------
+    // Modal: Barang Masuk (restock, delta +qty)
+    // ---------------------------------------------------------------
+    function openRestockModal({ id, name }) {
+      modalMount.innerHTML = `
+        <div class="modal-overlay">
+          <div class="modal-box card">
+            <h3>Barang Masuk</h3>
+            <p class="muted">${escHtml(name)}</p>
+            <label class="field-label">Jumlah masuk</label>
+            <input class="field" id="rsQty" type="number" min="1" value="1" />
+            <label class="field-label">Catatan (opsional)</label>
+            <input class="field" id="rsNote" placeholder="mis. transfer dari gudang pusat / no. nota" />
+            <div id="rsErr" class="error-text" style="display:none"></div>
+            <button class="btn btn-primary btn-block" id="rsSubmit">Simpan</button>
+            <button class="btn btn-outline btn-block" id="rsCancel" style="margin-top:8px">Batal</button>
+          </div>
+        </div>`;
+      document.getElementById('rsCancel').addEventListener('click', closeModal);
+      document.getElementById('rsSubmit').addEventListener('click', async () => {
+        const btn = document.getElementById('rsSubmit');
+        const errEl = document.getElementById('rsErr');
+        errEl.style.display = 'none';
+        const qty = Number(document.getElementById('rsQty').value);
+        if (!(Number.isInteger(qty) && qty > 0)) { errEl.textContent = 'Jumlah harus bilangan bulat lebih dari 0.'; errEl.style.display = 'block'; return; }
+        btn.disabled = true;
+        try {
+          const res = await Api.restock(id, { qty, note: document.getElementById('rsNote').value.trim() });
+          closeModal();
+          showToast(`Stok ${name} kini ${res.qty_after}.`);
+          await load();
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.style.display = 'block';
+          btn.disabled = false;
+        }
+      });
+    }
+
+    // ---------------------------------------------------------------
+    // Modal: Sesuaikan / Stok Awal (set absolut)
+    // ---------------------------------------------------------------
+    function openAdjustModal({ id, name, qty }) {
+      modalMount.innerHTML = `
+        <div class="modal-overlay">
+          <div class="modal-box card">
+            <h3>Sesuaikan Stok</h3>
+            <p class="muted">${escHtml(name)} — tercatat sekarang <b>${qty}</b></p>
+            <label class="field-label">Stok fisik sebenarnya</label>
+            <input class="field" id="ajQty" type="number" min="0" value="${Number(qty) < 0 ? 0 : Number(qty)}" />
+            <label class="field-label">Catatan (opsional)</label>
+            <input class="field" id="ajNote" placeholder="mis. hasil hitung fisik / koreksi selisih" />
+            <div id="ajErr" class="error-text" style="display:none"></div>
+            <button class="btn btn-primary btn-block" id="ajSubmit">Simpan</button>
+            <button class="btn btn-outline btn-block" id="ajCancel" style="margin-top:8px">Batal</button>
+          </div>
+        </div>`;
+      document.getElementById('ajCancel').addEventListener('click', closeModal);
+      document.getElementById('ajSubmit').addEventListener('click', async () => {
+        const btn = document.getElementById('ajSubmit');
+        const errEl = document.getElementById('ajErr');
+        errEl.style.display = 'none';
+        const target = Number(document.getElementById('ajQty').value);
+        if (!(Number.isInteger(target) && target >= 0)) { errEl.textContent = 'Stok harus bilangan bulat 0 atau lebih.'; errEl.style.display = 'block'; return; }
+        btn.disabled = true;
+        try {
+          const res = await Api.adjustStock(id, { qty_on_hand: target, note: document.getElementById('ajNote').value.trim() });
+          closeModal();
+          showToast(`Stok ${name} disetel ke ${res.qty_after}.`);
+          await load();
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.style.display = 'block';
+          btn.disabled = false;
+        }
+      });
+    }
+
+    // ---------------------------------------------------------------
+    // Modal: Riwayat mutasi (read-only, 50 terakhir)
+    // ---------------------------------------------------------------
+    const REASON_LABEL = {
+      opening: 'Stok awal', adjustment: 'Penyesuaian', restock: 'Barang masuk', sale: 'Terjual',
+      void_return: 'Void (kembali)', cancel_return: 'Batal transaksi', purchase_receipt: 'Terima pembelian',
+      transfer_in: 'Transfer masuk', transfer_out: 'Transfer keluar',
+    };
+    async function openMovementsModal({ id, name }) {
+      modalMount.innerHTML = `
+        <div class="modal-overlay">
+          <div class="modal-box card" style="max-width:640px">
+            <h3>Riwayat Stok</h3>
+            <p class="muted">${escHtml(name)} — 50 mutasi terakhir</p>
+            <div id="mvWrap" style="overflow-x:auto"><p class="muted">Memuat…</p></div>
+            <button class="btn btn-outline btn-block" id="mvClose" style="margin-top:12px">Tutup</button>
+          </div>
+        </div>`;
+      document.getElementById('mvClose').addEventListener('click', closeModal);
+      try {
+        const { movements } = await Api.getStockMovements(id);
+        const wrap = document.getElementById('mvWrap');
+        if (!movements.length) { wrap.innerHTML = '<p class="muted">Belum ada mutasi.</p>'; return; }
+        wrap.innerHTML = `
+          <table class="summary-table">
+            <thead><tr><th>Waktu</th><th>Jenis</th><th class="num">Δ</th><th class="num">Sisa</th><th>Catatan / Ref</th><th>Oleh</th></tr></thead>
+            <tbody>${movements.map((m) => {
+              const ref = m.note || (m.ref_trans_id ? m.ref_trans_id : '');
+              const d = Number(m.delta);
+              return `<tr>
+                <td>${new Date(m.created_at).toLocaleString('id-ID')}</td>
+                <td>${REASON_LABEL[m.reason] || m.reason}</td>
+                <td class="num" style="color:${d < 0 ? 'var(--red)' : 'var(--green)'}">${d > 0 ? '+' : ''}${d}</td>
+                <td class="num">${m.qty_after}</td>
+                <td>${escHtml(ref || '-')}</td>
+                <td>${escHtml(m.created_by_name || '-')}</td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table>`;
+      } catch (err) {
+        document.getElementById('mvWrap').innerHTML = `<p class="error-text" style="margin:0">${escHtml(err.message)}</p>`;
+      }
+    }
+
+    function escHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function escAttr(s) { return escHtml(s); }
+
+    load();
+  </script>
+</body>
+</html>

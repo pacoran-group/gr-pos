@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Layar Dapur - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+<script src="https://cdn.jsdelivr.net/npm/qz-tray@2.2.4/qz-tray.js"></script>
+</head>
+<body>
+  <div id="shell"></div>
+  <div id="pageContent">
+    <p style="color:var(--text-muted);max-width:640px">
+      Halaman ini otomatis mengambil tiket baru tiap 2-3 detik dan mencetaknya lewat QZ Tray
+      lokal di komputer ini. Item kategori "Bar" (minuman siap saji/beralkohol) TIDAK muncul
+      di sini - sudah tercakup di slip gudang yang dicetak di Komputer A/B.
+    </p>
+    <div id="ticketLog" style="display:flex;flex-direction:column;gap:12px;margin-top:16px"></div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script src="/js/qz-print.js"></script>
+  <script>
+    renderLayout({ active: 'dashboard', title: 'Layar Dapur', subtitle: 'Auto-print tiket dapur (Komputer C)' });
+
+    const processed = new Set();
+
+    async function poll() {
+      try {
+        const { jobs } = await Api.getDapurQueue();
+        for (const job of jobs) {
+          if (processed.has(job.print_log_id)) continue;
+          processed.add(job.print_log_id);
+          await handleTicket(job);
+        }
+      } catch (err) { console.error(err); }
+    }
+
+    async function handleTicket(job) {
+      const log = document.getElementById('ticketLog');
+      const card = document.createElement('div');
+      card.className = 'card';
+      card.style.margin = '0';
+      const isBatal = job.print_type === 'tiket_dapur_batal';
+      if (isBatal) card.style.borderColor = 'var(--red)';
+      card.innerHTML = `
+        <div style="display:flex;justify-content:space-between;align-items:baseline">
+          <b style="font-size:15px">${isBatal ? '⚠ BATAL / RETUR — ' : ''}${job.payload.room_name || ''}</b>
+          <span style="font-size:11px;color:var(--text-faint)">${new Date(job.created_at).toLocaleTimeString('id-ID')}</span>
+        </div>
+        <div style="margin-top:8px;color:${isBatal ? 'var(--red)' : 'var(--text-muted)'};font-size:13px">
+          ${job.payload.items.map((i) => `${isBatal ? 'BATAL ' : ''}${i.qty}x ${i.product_name}`).join('<br/>')}
+        </div>
+        <div style="margin-top:10px">
+          <button class="btn btn-primary btnSiap">Tandai Siap</button>
+        </div>
+      `;
+      log.prepend(card);
+
+      try {
+        await QzPrint.printJob(job);
+        await Api.ackPrint(job.print_log_id);
+      } catch (printErr) {
+        card.innerHTML += `<div class="error-text">Gagal cetak otomatis: ${printErr.message}</div>`;
+      }
+
+      card.querySelector('.btnSiap').addEventListener('click', async (e) => {
+        e.target.disabled = true;
+        e.target.textContent = 'Sudah ditandai siap';
+        try { await Api.markSiap(job.print_log_id); } catch (err) { console.error(err); }
+      });
+    }
+
+    poll();
+    setInterval(poll, 2500);
+  </script>
+</body>
+</html>

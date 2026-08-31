@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html lang="id">
+<head><meta charset="UTF-8" /><title>Redirect</title></head>
+<body>
+  <script>
+    // Halaman ini digantikan oleh room-detail.html (desain baru) - redirect otomatis.
+    const id = new URLSearchParams(location.search).get('id');
+    window.location.replace(id ? `/room-detail.html?id=${id}` : '/dashboard.html');
+  </script>
+</body>
+</html>

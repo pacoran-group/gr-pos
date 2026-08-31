@@ -1,0 +1,11 @@
+<!DOCTYPE html>
+<html lang="id">
+<head><meta charset="UTF-8" /><title>Redirect</title></head>
+<body>
+  <script>
+    // Halaman ini digantikan oleh orders.html (desain baru) - redirect otomatis.
+    const roomId = new URLSearchParams(location.search).get('room_id');
+    window.location.replace(roomId ? `/orders.html?room_id=${roomId}` : '/orders.html');
+  </script>
+</body>
+</html>

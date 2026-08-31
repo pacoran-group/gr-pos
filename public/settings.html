@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Setelan - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+</head>
+<body>
+  <div id="shell"></div>
+  <div id="pageContent">
+    <div class="card" style="max-width:520px">
+      <h3>Setelan Printer Terminal <small>Disimpan per-browser (per komputer) - tiap komputer bisa punya nama printer berbeda persis.</small></h3>
+      <label class="field-label">Nama printer THERMAL (slip gudang &amp; tiket dapur)</label>
+      <input class="field" id="printerThermal" placeholder="mis. POS-80 Series" />
+      <label class="field-label">Nama printer EPSON (2-ply, struk billing &amp; tagihan akhir)</label>
+      <input class="field" id="printerEpson" placeholder="mis. EPSON TM-U220" />
+      <button class="btn btn-primary" id="btnSave">Simpan</button>
+      <span id="savedMsg" class="success-text" style="display:none;margin-left:10px">Tersimpan.</span>
+    </div>
+
+    <div class="card" style="max-width:520px;margin-top:18px;display:none" id="syncCard">
+      <h3>Sinkron Master Data <small>Salin m_product, m_room, m_promo, m_member, m_category, tax_service dari server lama (154). Otomatis tiap 5 menit; tombol ini untuk memaksa sekarang.</small></h3>
+      <button class="btn btn-primary" id="btnSync">Sinkron Sekarang</button>
+      <span id="syncMsg" style="margin-left:10px;font-size:12.5px"></span>
+      <div id="syncLast" style="margin-top:10px;font-size:12px;color:var(--text-muted)"></div>
+    </div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script>
+    renderLayout({ active: 'settings', title: 'Setelan' });
+    document.getElementById('printerThermal').value = localStorage.getItem('gr_pos_printer_thermal') || '';
+    document.getElementById('printerEpson').value = localStorage.getItem('gr_pos_printer_epson') || '';
+
+    document.getElementById('btnSave').addEventListener('click', () => {
+      localStorage.setItem('gr_pos_printer_thermal', document.getElementById('printerThermal').value.trim());
+      localStorage.setItem('gr_pos_printer_epson', document.getElementById('printerEpson').value.trim());
+      const msg = document.getElementById('savedMsg');
+      msg.style.display = 'inline';
+      setTimeout(() => (msg.style.display = 'none'), 2000);
+    });
+
+    // Kartu Sinkron Master Data - hanya admin/supervisor.
+    const u = getUser() || {};
+    if (['admin', 'supervisor'].includes(u.role)) {
+      document.getElementById('syncCard').style.display = 'block';
+      const fmtLast = (r) => {
+        if (!r) return 'Belum pernah sinkron di sesi server ini.';
+        const tabs = Object.entries(r.tables || {}).map(([k, v]) => `${k}=${v}`).join(', ') || '(tidak ada perubahan)';
+        const skip = (r.skipped_tables || []).length ? ` | dilewati: ${r.skipped_tables.join(', ')}` : '';
+        const errs = Object.keys(r.errors || {}).length ? ` | ERROR: ${JSON.stringify(r.errors)}` : '';
+        const sc = r.scope ? `/${r.scope}` : '';
+        return `Terakhir (${r.trigger}${sc}, ${new Date(r.at).toLocaleString('id-ID')}): ${tabs}${skip} — ${r.duration_ms}ms${errs}`;
+      };
+      Api.getLastMasterSync().then(({ last }) => { document.getElementById('syncLast').textContent = fmtLast(last); }).catch(() => {});
+      document.getElementById('btnSync').addEventListener('click', async () => {
+        const btn = document.getElementById('btnSync');
+        const msg = document.getElementById('syncMsg');
+        btn.disabled = true;
+        msg.textContent = 'Sinkron berjalan...';
+        try {
+          const r = await Api.syncMasterData();
+          if (r.skipped) msg.textContent = 'Dilewati: ' + r.reason;
+          else msg.textContent = r.ok ? `Selesai dalam ${r.duration_ms}ms.` : `Selesai dengan error (lihat detail).`;
+          document.getElementById('syncLast').textContent = fmtLast(r.skipped ? null : r);
+        } catch (err) {
+          msg.textContent = 'Gagal: ' + err.message;
+        }
+        btn.disabled = false;
+      });
+    }
+  </script>
+</body>
+</html>

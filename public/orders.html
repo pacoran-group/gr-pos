@@ -1,0 +1,401 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Orders - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+</head>
+<body>
+  <div id="shell"></div>
+
+  <div id="pageContent">
+    <div id="roomPicker" class="card" style="display:none">
+      <h3>Pilih Kamar untuk Sesi Baru</h3>
+      <select class="field" id="roomPickerSelect"></select>
+      <button class="btn btn-primary" id="btnPickRoom">Lanjut</button>
+    </div>
+
+    <div id="ordersMain" style="display:none">
+      <div class="orders-layout">
+        <div>
+          <div class="category-tabs" id="categoryTabs"></div>
+          <div class="item-grid" id="itemGrid"></div>
+        </div>
+
+        <div class="order-cart">
+          <h3><span id="cartTitle">Active Order</span></h3>
+          <div class="room-pill" id="roomPill" style="display:none"><span class="dot"></span><span id="roomPillText"></span></div>
+
+          <div id="sessionForm" style="display:none">
+            <label class="field-label">Nama Tamu</label>
+            <input class="field" id="custName" placeholder="MR. GUEST" />
+            <label class="field-label">Jumlah Orang</label>
+            <input class="field" id="person" type="number" min="0" value="0" />
+            <label class="field-label" id="testModeWrap" style="display:none;margin-top:10px">
+              <input type="checkbox" id="isTestMode" /> Mode Test (admin/supervisor)
+            </label>
+            <div id="testModeNote" style="display:none;font-size:11px;color:#d97706;margin-top:4px">
+              Mode Test aktif — kamar TIDAK tercatat terisi di status kamar asli (aman dari bentrok dengan sistem lama), threshold &amp; pembayaran dilewati, dan tidak ada struk yang tercetak.
+            </div>
+          </div>
+
+          <div id="cartLines"></div>
+          <div id="cartEmpty" class="cart-empty">Belum ada item dipilih.</div>
+
+          <div class="totals-block">
+            <div class="totals-row"><span>Subtotal</span><span id="cartSubtotal">Rp0</span></div>
+            <div class="totals-row grand"><span>Total</span><span id="cartTotal">Rp0</span></div>
+            <div id="thresholdNote" style="font-size:11px;color:var(--text-faint);margin-top:6px"></div>
+          </div>
+
+          <div id="thresholdInfo" class="threshold-info" style="display:none"></div>
+
+          <div id="submitError" class="error-text" style="display:none"></div>
+          <button class="btn btn-primary btn-block" id="btnSubmit" style="margin-top:12px">Buka Kamar &amp; Cetak Struk</button>
+          <button class="btn btn-outline btn-block" id="btnCancel" style="margin-top:8px">Batal</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script src="/js/qz-print.js"></script>
+  <script>
+    let searchTerm = '';
+    renderLayout({
+      active: 'orders', title: 'Katalog Menu', subtitle: 'Pilih item untuk ditambahkan ke pesanan',
+      onSearch: (q) => { searchTerm = q; renderItemGrid(); },
+    });
+
+    const params = new URLSearchParams(location.search);
+    const roomId = params.get('room_id') ? Number(params.get('room_id')) : null;
+    const transId = params.get('trans_id');
+    const mode = transId ? 'existing' : (roomId ? 'new' : 'pick');
+
+    let products = [];
+    let cart = []; // { product_id, product_name, price, qty }
+    // Info threshold & waktu untuk panel keranjang (up-selling).
+    let roomThreshold = null;   // Rp
+    let thresholdWindow = null; // 'siang' | 'malam'
+    let hoursPerThreshold = 2;
+    let existingFnb = 0;        // FnB yang sudah tercatat (mode 'existing' saja)
+
+    // Idempotency key untuk percobaan submit yang SEDANG berjalan. Sengaja
+    // TIDAK dibuat baru di setiap klik "Submit" - kalau percobaan sebelumnya
+    // gagal karena error jaringan (bukan error validasi/bisnis) dan kasir
+    // menekan submit lagi tanpa mengubah keranjang, key yang SAMA dipakai
+    // ulang supaya server bisa mengenali ini retry, bukan order baru (lihat
+    // Api.bukaKamar/tambahOrder di api.js & diagnosis-sync-issue.md).
+    // Direset ke null setiap kali isi keranjang berubah (add/qty), karena itu
+    // artinya niat kasir sudah berubah - retry lama sudah tidak relevan.
+    let pendingRequestKey = null;
+    function requestKeyForSubmit() {
+      if (!pendingRequestKey) pendingRequestKey = newRequestKey();
+      return pendingRequestKey;
+    }
+
+    // Konteks kamar/transaksi (isi roomPill, form sesi, dropdown pilih kamar).
+    // SENGAJA dipisah dari initCatalog() & dipanggil paralel (lihat init()) -
+    // dulu katalog di-load SETELAH await ini tanpa penanganan error, jadi
+    // kalau /api/rooms atau /api/trans gagal, katalog tidak pernah dirender
+    // dan tidak ada pesan apa pun (grid diam-diam kosong).
+    async function loadRoomContext() {
+      if (mode === 'pick') {
+        document.getElementById('roomPicker').style.display = 'block';
+        const { rooms } = await Api.getRooms();
+        const available = rooms.filter((r) => !r.is_maintenance && !r.active_trans && !r.soft_lock);
+        const sel = document.getElementById('roomPickerSelect');
+        sel.innerHTML = available.map((r) => `<option value="${r.room_id}">${r.room_name} (${r.room_type})</option>`).join('') || '<option value="">Tidak ada kamar kosong</option>';
+        document.getElementById('btnPickRoom').addEventListener('click', () => {
+          const v = sel.value;
+          if (v) window.location.href = `/orders.html?room_id=${v}`;
+        });
+        return;
+      }
+
+      document.getElementById('ordersMain').style.display = 'block';
+
+      if (mode === 'new') {
+        document.getElementById('sessionForm').style.display = 'block';
+        document.getElementById('cartTitle').textContent = 'Sesi Baru';
+        // Mode Test hanya ditawarkan ke admin/supervisor - lihat catatan
+        // TEST_MODE_ROLES di trans.routes.js. Kasir biasa tidak melihat opsi ini.
+        const currentUser = getUser();
+        if (currentUser && ['admin', 'supervisor'].includes(currentUser.role)) {
+          document.getElementById('testModeWrap').style.display = 'block';
+          document.getElementById('isTestMode').addEventListener('change', (e) => {
+            document.getElementById('testModeNote').style.display = e.target.checked ? 'block' : 'none';
+          });
+        }
+        try { await Api.softLock(roomId); } catch (e) { /* ignore */ }
+        // Fitur member DIHILANGKAN sementara (27 Agustus 2026, atas permintaan
+        // user) - skema m_member belum diverifikasi & tidak dipakai dulu.
+        // Tidak ada lagi pemanggilan Api.getMembers() di sini.
+        const { rooms } = await Api.getRooms();
+        const room = rooms.find((r) => r.room_id === roomId);
+        if (room) {
+          roomThreshold = room.threshold_amount;
+          hoursPerThreshold = room.hours_per_threshold || 2;
+          thresholdWindow = room.threshold_window;
+        }
+        document.getElementById('roomPill').style.display = 'inline-flex';
+        document.getElementById('roomPillText').textContent = `${room ? room.room_name : 'Room ' + roomId} (Kosong)`;
+        renderThresholdInfo();
+      } else {
+        const { trans, time_credit } = await Api.getTrans(transId);
+        roomThreshold = Number(trans.threshold_amount) || null;
+        thresholdWindow = trans.threshold_window;
+        existingFnb = time_credit ? time_credit.net_fnb : 0;
+        hoursPerThreshold = time_credit ? time_credit.hours_per_threshold : 2;
+        document.getElementById('cartTitle').textContent = 'Tambah Order';
+        document.getElementById('roomPill').style.display = 'inline-flex';
+        document.getElementById('roomPillText').textContent = `Room ${trans.room_id} (Occupied)`;
+        renderThresholdInfo();
+        document.getElementById('btnSubmit').textContent = 'Kirim ke Dapur / Gudang';
+      }
+    }
+
+    async function initCatalog() {
+      try {
+        const [{ products: p }, { categories }] = await Promise.all([Api.getProducts(), Api.getCategories()]);
+        products = p;
+        categoriesCache = categories;
+        renderCategoryTabs(categories);
+        renderItemGrid();
+        renderCart();
+        if (!products.length) {
+          document.getElementById('itemGrid').innerHTML =
+            '<div style="padding:24px;color:var(--text-faint)">Tidak ada produk aktif di katalog. Cek data <code>m_product</code> (kolom <code>is_active</code>) di database.</div>';
+        }
+      } catch (e) {
+        console.error('Gagal memuat katalog produk:', e);
+        document.getElementById('itemGrid').innerHTML =
+          `<div style="padding:24px;color:var(--red)">Gagal memuat katalog menu: ${e.message}</div>`;
+        showToast('Gagal memuat katalog menu: ' + e.message, 'error');
+      }
+    }
+
+    function showInitError(prefix, e) {
+      console.error(prefix, e);
+      showToast(prefix + ' ' + e.message, 'error');
+      const errEl = document.getElementById('submitError');
+      if (errEl) { errEl.textContent = prefix + ' ' + e.message; errEl.style.display = 'block'; }
+    }
+
+    async function init() {
+      // Katalog & konteks kamar dimuat paralel & independen: kegagalan salah
+      // satu tidak lagi mem-blank yang lain (pola sama dgn room-detail.html).
+      const tasks = [loadRoomContext().catch((e) => showInitError('Gagal memuat data kamar/transaksi:', e))];
+      if (mode !== 'pick') tasks.push(initCatalog()); // initCatalog sudah menangani error-nya sendiri
+      await Promise.allSettled(tasks);
+    }
+
+    // Lepas soft-lock kalau kasir meninggalkan halaman TANPA klik "Batal"
+    // (tombol Batal sudah melepas lock sendiri) - misalnya klik link sidebar,
+    // tombol back browser, atau menutup tab. Tanpa ini, room ini tetap
+    // ter-lock "sedang diproses" di dashboard sampai TTL soft-lock habis
+    // (default 120 detik, lihat SOFT_LOCK_TTL_SECONDS di .env) sebelum bisa
+    // dibuka lagi. 'pagehide' dipakai (bukan 'beforeunload') karena lebih
+    // konsisten terpicu di semua kasus di atas; fetch dgn keepalive:true
+    // supaya request tetap sempat terkirim walau halaman sedang ditutup.
+    window.addEventListener('pagehide', () => {
+      if (mode !== 'new') return;
+      try {
+        fetch(`/api/rooms/${roomId}/soft-lock`, {
+          method: 'DELETE',
+          headers: { 'Authorization': 'Bearer ' + getToken(), 'X-Terminal-Id': getTerminalId() },
+          keepalive: true,
+        });
+      } catch (e) { /* best effort - halaman sudah mau tertutup */ }
+    });
+
+    function categoryEmoji(name) {
+      const n = (name || '').toLowerCase();
+      if (n.includes('makan')) return '🍔';
+      if (n.includes('minum')) return '🥤';
+      if (n.includes('snack')) return '🍟';
+      if (n.includes('rokok')) return '🚬';
+      if (n.includes('bar')) return '🍸';
+      return '🍽️';
+    }
+
+    let activeCategory = 'all';
+    function renderCategoryTabs(categories) {
+      const wrap = document.getElementById('categoryTabs');
+      const tabs = [{ category_id: 'all', category_name: 'All Items' }, ...categories];
+      wrap.innerHTML = tabs.map((c) => `<button class="category-tab ${c.category_id === 'all' ? 'active' : ''}" data-cat="${c.category_id}">${c.category_name}</button>`).join('');
+      wrap.querySelectorAll('.category-tab').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          activeCategory = btn.dataset.cat;
+          wrap.querySelectorAll('.category-tab').forEach((b) => b.classList.toggle('active', b === btn));
+          renderItemGrid();
+        });
+      });
+    }
+
+    function renderItemGrid() {
+      const grid = document.getElementById('itemGrid');
+      let list = activeCategory === 'all' ? products : products.filter((p) => String(p.category_id) === String(activeCategory));
+      if (searchTerm) list = list.filter((p) => (p.product_name || '').toLowerCase().includes(searchTerm));
+      if (!list.length) {
+        grid.innerHTML = `<div style="padding:18px;color:var(--text-faint)">${
+          searchTerm ? 'Tidak ada item cocok dengan pencarian.' : 'Tidak ada item di kategori ini.'
+        }</div>`;
+        return;
+      }
+      // Tampilan LIST (baris) - lebih ringkas & cepat dipindai daripada grid kartu.
+      grid.innerHTML = list.map((p) => `
+        <div class="item-card" data-id="${p.product_id}">
+          <span class="thumb">${categoryEmoji(categoryNameOf(p.category_id))}</span>
+          <div class="name">${p.product_name}</div>
+          <span class="price">${rupiah(p.price)}</span>
+          <button class="add-btn">+</button>
+        </div>
+      `).join('');
+      grid.querySelectorAll('.item-card').forEach((cardEl) => {
+        cardEl.addEventListener('click', () => addToCart(cardEl.dataset.id));
+      });
+    }
+
+    let categoriesCache = [];
+    function categoryNameOf(id) {
+      const c = categoriesCache.find((x) => String(x.category_id) === String(id));
+      return c ? c.category_name : '';
+    }
+
+    function addToCart(productId) {
+      const p = products.find((x) => x.product_id === productId);
+      if (!p) return;
+      const line = cart.find((l) => l.product_id === productId);
+      if (line) line.qty++;
+      else cart.push({ product_id: p.product_id, product_name: p.product_name, price: Number(p.price), qty: 1 });
+      pendingRequestKey = null; // isi keranjang berubah - percobaan submit sebelumnya (kalau ada) tidak relevan lagi
+      renderCart();
+    }
+    function changeQty(productId, delta) {
+      const line = cart.find((l) => l.product_id === productId);
+      if (!line) return;
+      line.qty += delta;
+      if (line.qty <= 0) cart = cart.filter((l) => l.product_id !== productId);
+      pendingRequestKey = null;
+      renderCart();
+    }
+
+    function renderCart() {
+      const linesEl = document.getElementById('cartLines');
+      const emptyEl = document.getElementById('cartEmpty');
+      if (!cart.length) {
+        linesEl.innerHTML = '';
+        emptyEl.style.display = 'block';
+      } else {
+        emptyEl.style.display = 'none';
+        linesEl.innerHTML = cart.map((l) => `
+          <div class="cart-line">
+            <div class="info"><div class="n">${l.product_name}</div><div class="p">${rupiah(l.price)}</div></div>
+            <div class="qty-stepper">
+              <button data-id="${l.product_id}" data-d="-1">-</button>
+              <span class="n">${l.qty}</span>
+              <button data-id="${l.product_id}" data-d="1">+</button>
+            </div>
+          </div>
+        `).join('');
+        linesEl.querySelectorAll('button').forEach((b) => b.addEventListener('click', () => changeQty(b.dataset.id, Number(b.dataset.d))));
+      }
+      const total = cart.reduce((s, l) => s + l.price * l.qty, 0);
+      document.getElementById('cartSubtotal').textContent = rupiah(total);
+      document.getElementById('cartTotal').textContent = rupiah(total);
+      renderThresholdInfo(total);
+    }
+
+    // Panel "threshold & waktu" di keranjang - biar kasir & tamu tahu belanja
+    // saat ini sudah dapat berapa jam, dan pancingan up-sell ke jam berikutnya.
+    function renderThresholdInfo(cartTotal = 0) {
+      const box = document.getElementById('thresholdInfo');
+      if (!roomThreshold || mode === 'pick') { box.style.display = 'none'; return; }
+      const fnb = existingFnb + cartTotal;
+      const hours = hoursPerThreshold * (fnb / roomThreshold);
+      const hh = Math.floor(hours);
+      const mm = Math.round((hours - hh) * 60);
+      const winTxt = thresholdWindow ? ` (${thresholdWindow})` : '';
+      let html =
+        `<div class="ti-row"><span>Threshold kamar${winTxt}</span><b>${rupiah(roomThreshold)}</b></div>` +
+        `<div class="ti-row"><span>FnB saat ini</span><b>${rupiah(fnb)}</b></div>` +
+        `<div class="ti-row ti-grand"><span>Dapat waktu</span><b>${hh} jam ${mm} menit</b></div>`;
+      if (fnb < roomThreshold) {
+        const kurang = Math.ceil((roomThreshold - fnb) / 1000) * 1000;
+        html += `<div class="ti-hint">Kurang <b>${rupiah(kurang)}</b> lagi untuk mencapai threshold & buka kamar (dapat ${hoursPerThreshold} jam).</div>`;
+      } else {
+        const nextH = Math.floor(hours) + 1;
+        const needTotal = (nextH * roomThreshold) / hoursPerThreshold;
+        const addMore = Math.ceil((needTotal - fnb) / 1000) * 1000;
+        html += `<div class="ti-hint">💡 Tambah <b>${rupiah(addMore)}</b> lagi → dapat <b>${nextH} jam</b>.</div>`;
+      }
+      box.innerHTML = html;
+      box.style.display = 'block';
+    }
+
+    document.getElementById('btnCancel').addEventListener('click', async () => {
+      if (mode === 'new') { try { await Api.releaseSoftLock(roomId); } catch (e) {} }
+      window.location.href = mode === 'existing' ? `/room-detail.html?id=${transId}` : '/dashboard.html';
+    });
+
+    document.getElementById('btnSubmit').addEventListener('click', async () => {
+      const errEl = document.getElementById('submitError');
+      errEl.style.display = 'none';
+      const items = cart.map((l) => ({ product_id: l.product_id, qty: l.qty }));
+      const btn = document.getElementById('btnSubmit');
+      btn.disabled = true;
+      const requestKey = requestKeyForSubmit();
+      try {
+        if (mode === 'new') {
+          const testModeEl = document.getElementById('isTestMode');
+          const payload = {
+            room_id: roomId,
+            cust_name: document.getElementById('custName').value.trim() || 'MR. GUEST',
+            person: Number(document.getElementById('person').value) || 0,
+            member_id: null, // fitur member dihilangkan sementara - lihat catatan di init()
+            items,
+            is_test: Boolean(testModeEl && testModeEl.checked),
+          };
+          const result = await Api.bukaKamar(payload, requestKey);
+          await printJobsSafely(result.print_jobs);
+          stashStockWarn(result.stock_warnings);
+          window.location.href = `/room-detail.html?id=${result.trans_id}`;
+        } else {
+          if (!items.length) { btn.disabled = false; return; }
+          const result = await Api.tambahOrder(transId, items, requestKey);
+          showToast('Order dikirim ke dapur/gudang.');
+          stashStockWarn(result.stock_warnings);
+          window.location.href = `/room-detail.html?id=${transId}`;
+        }
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+        btn.disabled = false;
+      }
+    });
+
+    async function printJobsSafely(jobs) {
+      for (const job of jobs || []) {
+        try {
+          await QzPrint.printJob(job);
+          await Api.ackPrint(job.print_log_id);
+        } catch (printErr) {
+          alert(`Transaksi tersimpan, tapi cetak "${job.print_type}" gagal: ${printErr.message}\nCek QZ Tray & Setelan Printer.`);
+        }
+      }
+    }
+
+    // Halaman ini langsung redirect setelah simpan, jadi toast peringatan
+    // stok minus dititipkan lewat sessionStorage & ditampilkan di room-detail.
+    function stashStockWarn(warnings) {
+      if (warnings && warnings.length) {
+        sessionStorage.setItem('gr_stock_warn', warnings.map((w) => w.product_name).join(', '));
+      }
+    }
+
+    init().catch((e) => showInitError('Gagal memuat halaman:', e));
+  </script>
+</body>
+</html>

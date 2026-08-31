@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Login - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+</head>
+<body>
+  <div class="login-wrap">
+    <div class="login-box">
+      <div class="logo-dot" style="width:44px;height:44px;font-size:17px">GR</div>
+      <h2>Grand Royal POS</h2>
+      <p class="sub">Masuk untuk melanjutkan</p>
+      <div id="expiredMsg" class="error-text" style="display:none">Sesi berakhir, silakan login ulang.</div>
+      <label class="field-label">Username</label>
+      <input class="field" id="username" autocomplete="username" />
+      <label class="field-label">Password</label>
+      <input class="field" id="password" type="password" autocomplete="current-password" />
+      <div id="loginError" class="error-text" style="display:none"></div>
+      <button class="btn btn-primary btn-block" id="btnLogin">Masuk</button>
+    </div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script>
+    if (new URLSearchParams(location.search).get('expired')) {
+      document.getElementById('expiredMsg').style.display = 'block';
+    }
+
+    document.getElementById('btnLogin').addEventListener('click', async () => {
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value;
+      const errEl = document.getElementById('loginError');
+      errEl.style.display = 'none';
+
+      try {
+        const result = await Api.login(username, password);
+        setSession(result.token, result.user);
+        window.location.href = '/dashboard.html';
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+      }
+    });
+
+    document.getElementById('password').addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') document.getElementById('btnLogin').click();
+    });
+  </script>
+</body>
+</html>
