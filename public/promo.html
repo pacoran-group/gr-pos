@@ -15,6 +15,7 @@
   .badge2 { font-size: 10px; padding: 2px 7px; border-radius: 9px; font-weight: 700; text-transform: uppercase; }
   .badge2.b1g1 { background: var(--cyan-dim); color: var(--cyan); }
   .badge2.bundle { background: var(--purple-dim); color: var(--purple); }
+  .badge2.checkin_gift { background: var(--pink-dim); color: var(--pink); }
   .badge2.on { background: var(--green-dim); color: var(--green); }
   .badge2.off { background: var(--gray-dim); color: var(--text-muted); }
   .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 14px; margin: 8px 0 12px; }
@@ -22,13 +23,14 @@
   .form-grid .field, .form-grid select.field { margin: 0; width: 100%; }
   .days { display: flex; gap: 5px; flex-wrap: wrap; }
   .days label { display: flex; align-items: center; gap: 4px; font-size: 12px; background: var(--card-inset); padding: 4px 8px; border-radius: 7px; }
-  .comp-row { display: flex; gap: 8px; margin-bottom: 6px; }
-  .comp-row select { flex: 1; }
-  .comp-row input { width: 64px; }
+  .comp-row { display: flex; gap: 8px; margin-bottom: 8px; align-items: center; }
+  .comp-row .field { margin: 0; }
+  .comp-row select.field { flex: 1; min-width: 0; }
+  .comp-row input.field { width: 72px; flex-shrink: 0; }
   .comp-row button { flex-shrink: 0; }
   .muted-note { font-size: 11.5px; color: var(--text-muted); }
-  .type-tabs { display: flex; gap: 8px; margin-bottom: 8px; }
-  .type-tabs button { flex: 1; }
+  .type-tabs { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+  .type-tabs button { flex: 1; min-width: 130px; font-size: 12px; padding: 8px 6px; }
   .type-tabs button.sel { border-color: var(--cyan); color: var(--cyan); }
 </style>
 </head>
@@ -78,8 +80,15 @@
       if (p.type === 'b1g1') {
         return `Beli ${p.buy_qty} gratis ${p.free_qty} — ${esc(p.product_name || p.product_id)} (${rp(p.product_price)})`;
       }
+      if (p.type === 'checkin_gift') {
+        return `Hadiah check-in: ${p.free_qty}× ${esc(p.product_name || p.product_id)} gratis` +
+          (Number(p.requires_id_check) ? ' · syarat: tunjukkan kartu ID' : '');
+      }
       const comps = (p.components || []).map((c) => `${c.qty}× ${esc(c.product_name || c.product_id)}`).join(' + ');
       return `${comps} = ${rp(p.bundle_price)}`;
+    }
+    function typeLabel(t) {
+      return t === 'b1g1' ? 'B1G1' : t === 'checkin_gift' ? 'HADIAH' : 'PAKET';
     }
 
     async function load() {
@@ -104,7 +113,7 @@
         <div class="promo-row">
           <div class="body">
             <div class="name">${esc(p.name)}
-              <span class="badge2 ${p.type}">${p.type === 'b1g1' ? 'B1G1' : 'PAKET'}</span>
+              <span class="badge2 ${p.type}">${typeLabel(p.type)}</span>
               <span class="badge2 ${p.active ? 'on' : 'off'}">${p.active ? 'AKTIF' : 'NONAKTIF'}</span>
             </div>
             <div class="meta">${ruleText(p)}<br/>${windowText(p)}${p.note ? ' · ' + esc(p.note) : ''}</div>
@@ -148,6 +157,7 @@
           <div class="type-tabs" style="margin-top:10px">
             <button class="btn btn-outline ${curType === 'b1g1' ? 'sel' : ''}" data-type="b1g1">Buy 1 Get 1</button>
             <button class="btn btn-outline ${curType === 'bundle' ? 'sel' : ''}" data-type="bundle">Paket Harga</button>
+            <button class="btn btn-outline ${curType === 'checkin_gift' ? 'sel' : ''}" data-type="checkin_gift">Hadiah Check-in</button>
           </div>
 
           <div id="typeBox"></div>
@@ -178,6 +188,17 @@
               <div><label class="field-label">Beli qty</label><input type="number" min="1" class="field" id="f_buy" value="${v.buy_qty || 1}" /></div>
               <div><label class="field-label">Gratis qty</label><input type="number" min="1" class="field" id="f_free" value="${v.free_qty || 1}" /></div>
             </div>`;
+        } else if (curType === 'checkin_gift') {
+          box.innerHTML = `
+            <label class="field-label">Produk hadiah</label>
+            <select class="field" id="f_prod">${prodOptions(v.product_id)}</select>
+            <label class="field-label">Qty hadiah</label>
+            <input type="number" min="1" class="field" id="f_free" value="${v.free_qty || 1}" />
+            <label class="chk" style="display:flex;gap:8px;align-items:center;font-size:13px;margin:2px 0 4px">
+              <input type="checkbox" id="f_idcheck" ${v.requires_id_check == null || Number(v.requires_id_check) ? 'checked' : ''}/>
+              Wajib tamu menunjukkan kartu ID
+            </label>
+            <p class="muted-note">Diberikan otomatis saat <b>Buka Kamar</b> selama window promo (tanggal + jam + hari). Kalau "wajib kartu ID" dicentang, kasir harus mencentang konfirmasi di layar Buka Kamar. Item hadiah tetap dibuatkan tiket dapur / slip gudang & mengurangi stok; tidak menambah tagihan & tidak menambah alokasi waktu karaoke.</p>`;
         } else {
           const comps = (v.components && v.components.length) ? v.components : [{ product_id: '', qty: 1 }, { product_id: '', qty: 1 }];
           box.innerHTML = `
@@ -196,8 +217,8 @@
       }
       function compRowHtml(c) {
         return `<div class="comp-row">
-          <select>${prodOptions(c.product_id)}</select>
-          <input type="number" min="1" value="${c.qty || 1}" />
+          <select class="field">${prodOptions(c.product_id)}</select>
+          <input class="field" type="number" min="1" value="${c.qty || 1}" />
           <button class="btn btn-outline" style="padding:4px 8px;font-size:11px" data-rmcomp>×</button>
         </div>`;
       }
@@ -236,6 +257,10 @@
         body.product_id = document.getElementById('f_prod').value;
         body.buy_qty = document.getElementById('f_buy').value;
         body.free_qty = document.getElementById('f_free').value;
+      } else if (type === 'checkin_gift') {
+        body.product_id = document.getElementById('f_prod').value;
+        body.free_qty = document.getElementById('f_free').value;
+        body.requires_id_check = document.getElementById('f_idcheck').checked;
       } else {
         body.bundle_price = document.getElementById('f_bprice').value;
         body.components = [...document.querySelectorAll('#compList .comp-row')].map((r) => ({

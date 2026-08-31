@@ -142,6 +142,47 @@ async function evaluateActivePromos(conn, cartLines, now = new Date()) {
 }
 
 /**
+ * Promo "Hadiah Check-in" (type 'checkin_gift') - dievaluasi HANYA saat
+ * buka-kamar. Mengembalikan daftar promo hadiah yang berlaku sekarang
+ * (tanggal + jendela jam + hari), setelah menyaring yang butuh centang
+ * kartu ID kalau `idShown` false.
+ *
+ * Pemanggil (trans.routes.js buka-kamar) yang menyisipkan item hadiahnya
+ * ke pesanan & meng-nol-kan lewat promo_disc_fnb.
+ *
+ * @param {object} conn
+ * @param {{idShown?: boolean}} opts
+ * @returns {Promise<Array<{promo_id, name, product_id, free_qty, requires_id_check}>>}
+ */
+async function evaluateCheckinGifts(conn, opts = {}, now = new Date()) {
+  const idShown = Boolean(opts.idShown);
+  const { date, hm, dow } = nowParts(now);
+  const [promos] = await conn.query(
+    `SELECT promo_id, name, product_id, free_qty, requires_id_check,
+            start_time, end_time, days_of_week
+       FROM web_promo
+      WHERE active = 1 AND type = 'checkin_gift' AND product_id IS NOT NULL
+        AND (start_date IS NULL OR start_date <= ?)
+        AND (end_date   IS NULL OR end_date   >= ?)`,
+    [date, date]
+  );
+  const out = [];
+  for (const p of promos) {
+    if (!withinTimeWindow(p.start_time, p.end_time, hm)) continue;
+    if (!withinDays(p.days_of_week, dow)) continue;
+    if (p.requires_id_check && !idShown) continue;
+    out.push({
+      promo_id: p.promo_id,
+      name: p.name,
+      product_id: String(p.product_id),
+      free_qty: Math.max(1, Number(p.free_qty) || 1),
+      requires_id_check: !!p.requires_id_check,
+    });
+  }
+  return out;
+}
+
+/**
  * Hitung ulang promo untuk sebuah transaksi dari keranjang efektifnya
  * (web_tr_trans_details, sudah dikurangi void), simpan promo_disc_fnb +
  * tulis ulang web_promo_applied. Dipanggil setelah tiap mutasi keranjang.
@@ -160,11 +201,21 @@ async function recomputeForTrans(conn, transId) {
   }));
   const res = await evaluateActivePromos(conn, cart);
 
-  await conn.query('UPDATE web_tr_trans SET promo_disc_fnb = ? WHERE trans_id = ?', [
-    res.promo_disc_fnb,
-    transId,
-  ]);
-  await conn.query('DELETE FROM web_promo_applied WHERE trans_id = ?', [transId]);
+  // Hadiah check-in (type 'checkin_gift') diberikan SEKALI saat buka-kamar &
+  // TIDAK dievaluasi ulang di sini. Pertahankan baris web_promo_applied-nya +
+  // ikutkan diskonnya supaya item hadiah tetap ternol saat tambah-order/void.
+  const [giftRows] = await conn.query(
+    "SELECT discount_amount FROM web_promo_applied WHERE trans_id = ? AND promo_type = 'checkin_gift'",
+    [transId]
+  );
+  const giftDisc = giftRows.reduce((s, g) => s + Number(g.discount_amount), 0);
+
+  const fnbGross = lines.reduce((s, l) => s + Number(l.qty) * Number(l.price), 0);
+  const promoDiscFnb = Math.min(rp(res.promo_disc_fnb + giftDisc), rp(fnbGross));
+
+  await conn.query('UPDATE web_tr_trans SET promo_disc_fnb = ? WHERE trans_id = ?', [promoDiscFnb, transId]);
+  // hapus HANYA yang dievaluasi ulang; baris hadiah check-in dibiarkan.
+  await conn.query("DELETE FROM web_promo_applied WHERE trans_id = ? AND promo_type <> 'checkin_gift'", [transId]);
   for (const a of res.applied) {
     await conn.query(
       `INSERT INTO web_promo_applied
@@ -173,7 +224,7 @@ async function recomputeForTrans(conn, transId) {
       [transId, a.promo_id, a.promo_name, a.promo_type, a.discount_amount, JSON.stringify(a.detail || null)]
     );
   }
-  return res;
+  return { promo_disc_fnb: promoDiscFnb, applied: res.applied };
 }
 
 /**
@@ -195,4 +246,6 @@ async function productsLockedByActivePromos(conn = pool, excludePromoId = 0) {
   return new Set(rows.map((r) => String(r.product_id)));
 }
 
-module.exports = { evaluateActivePromos, recomputeForTrans, productsLockedByActivePromos };
+module.exports = {
+  evaluateActivePromos, evaluateCheckinGifts, recomputeForTrans, productsLockedByActivePromos,
+};

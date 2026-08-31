@@ -5,6 +5,11 @@
    ===================================================================== */
 
 :root {
+  /* Beritahu browser ini tema gelap -> dropdown <select>, date/time picker,
+     dan scrollbar bawaan ikut gelap (kalau tidak, daftar pilihan <option>
+     jadi teks gelap di latar gelap = tak terbaca). */
+  color-scheme: dark;
+
   /* Palet "Nightfall" - dinaikkan kecerahannya (feedback: ruang karaoke gelap,
      grid harus terbaca sekilas). Basis kartu = #3c455c. Aksen neon tetap. */
   --bg: #1a1f2b;
@@ -170,6 +175,8 @@ input.field, select.field {
   width: 100%; background: var(--card-inset); border: 1px solid var(--border);
   border-radius: var(--radius-sm); padding: 10px 12px; color: var(--text); margin: 6px 0 14px;
 }
+/* Sebagian browser (Linux/versi lama) abaikan color-scheme utk warna <option>. */
+select.field option { background: var(--card-inset); color: var(--text); }
 label.field-label { font-size: 12px; color: var(--text-muted); font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; }
 
 .error-text { color: var(--red); font-size: 12.5px; margin: -6px 0 12px; }

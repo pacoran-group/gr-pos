@@ -56,6 +56,11 @@
               <label class="field-label">Password</label>
               <input class="field" id="compApprPass" type="password" autocomplete="off" />
             </div>
+
+            <label class="field-label" style="display:flex;gap:8px;align-items:center;font-size:12.5px;text-transform:none;margin-top:10px">
+              <input type="checkbox" id="idCardShown" /> Tamu menunjukkan kartu ID
+            </label>
+            <div class="muted-note" style="font-size:11px;color:var(--text-faint)">Centang kalau tamu benar-benar menunjukkan kartu ID — dipakai promo "Hadiah Check-in" (mis. free tahu sebelum jam 18:00). Tanpa promo aktif, centang ini tidak berpengaruh.</div>
           </div>
 
           <div id="cartLines"></div>
@@ -421,6 +426,7 @@
             member_id: null, // fitur member dihilangkan sementara - lihat catatan di init()
             items,
             is_test: !isComp && Boolean(testModeEl && testModeEl.checked),
+            id_card_shown: Boolean(document.getElementById('idCardShown') && document.getElementById('idCardShown').checked),
           };
           if (isComp) {
             const compReason = document.getElementById('compReason').value.trim();
@@ -445,6 +451,10 @@
           const result = await Api.bukaKamar(payload, requestKey);
           await printJobsSafely(result.print_jobs);
           stashStockWarn(result.stock_warnings);
+          if (result.checkin_gifts && result.checkin_gifts.length) {
+            sessionStorage.setItem('gr_gift_note',
+              result.checkin_gifts.map((g) => `${g.qty}× ${g.product_name}`).join(', '));
+          }
           window.location.href = `/room-detail.html?id=${result.trans_id}`;
         } else {
           if (!items.length) { btn.disabled = false; return; }

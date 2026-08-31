@@ -46,14 +46,18 @@ async function assertProductsExist(conn, ids) {
   if (missing.length) throw new AppError(400, `Produk tidak ditemukan: ${missing.join(', ')}.`);
 }
 
-// Kumpulkan product_id yang disentuh payload promo.
+// Kumpulkan product_id yang disentuh payload promo (utk cek keberadaan produk).
 function touchedProducts(body) {
-  if (body.type === 'b1g1') return body.product_id != null ? [String(body.product_id)] : [];
+  if (body.type === 'b1g1' || body.type === 'checkin_gift') {
+    return body.product_id != null ? [String(body.product_id)] : [];
+  }
   return (body.components || []).map((c) => String(c.product_id));
 }
 
 async function assertNoOverlap(conn, body, excludeId, willBeActive) {
   if (!willBeActive) return; // promo nonaktif boleh berbagi produk
+  // Hadiah check-in bukan diskon atas produk yang dibeli -> tidak kena aturan overlap.
+  if (body.type === 'checkin_gift') return;
   const mine = touchedProducts(body);
   if (!mine.length) return;
   const locked = await promoSvc.productsLockedByActivePromos(conn, excludeId || 0);
@@ -72,12 +76,15 @@ function parseBody(body) {
   const name = String(body.name || '').trim();
   const type = String(body.type || '').trim();
   if (!name) throw new AppError(400, 'Nama promo wajib diisi.');
-  if (!['b1g1', 'bundle'].includes(type)) throw new AppError(400, "Tipe promo harus 'b1g1' atau 'bundle'.");
+  if (!['b1g1', 'bundle', 'checkin_gift'].includes(type)) {
+    throw new AppError(400, "Tipe promo harus 'b1g1', 'bundle', atau 'checkin_gift'.");
+  }
 
+  const falsy = (v) => v === false || String(v) === 'false' || v === 0 || v === '0';
   const common = {
     name,
     type,
-    active: body.active === false || String(body.active) === 'false' || body.active === 0 ? 0 : 1,
+    active: falsy(body.active) ? 0 : 1,
     start_date: normDate(body.start_date),
     end_date: normDate(body.end_date),
     start_time: normTime(body.start_time),
@@ -91,7 +98,15 @@ function parseBody(body) {
     const buy_qty = Math.max(1, parseInt(body.buy_qty, 10) || 1);
     const free_qty = Math.max(1, parseInt(body.free_qty, 10) || 1);
     if (!product_id) throw new AppError(400, 'B1G1: produk wajib dipilih.');
-    return { ...common, product_id, buy_qty, free_qty, bundle_price: null, components: [] };
+    return { ...common, product_id, buy_qty, free_qty, requires_id_check: 0, bundle_price: null, components: [] };
+  }
+
+  if (type === 'checkin_gift') {
+    const product_id = body.product_id != null ? String(body.product_id) : '';
+    if (!product_id) throw new AppError(400, 'Hadiah Check-in: produk hadiah wajib dipilih.');
+    const free_qty = Math.max(1, parseInt(body.free_qty, 10) || 1);
+    const requires_id_check = falsy(body.requires_id_check) ? 0 : 1;
+    return { ...common, product_id, buy_qty: 1, free_qty, requires_id_check, bundle_price: null, components: [] };
   }
 
   // bundle
@@ -103,7 +118,7 @@ function parseBody(body) {
   if (components.length < 2) throw new AppError(400, 'Paket butuh minimal 2 komponen produk.');
   const dup = components.map((c) => c.product_id);
   if (new Set(dup).size !== dup.length) throw new AppError(400, 'Komponen paket tidak boleh produk yang sama dua kali.');
-  return { ...common, product_id: null, buy_qty: 1, free_qty: 1, bundle_price, components };
+  return { ...common, product_id: null, buy_qty: 1, free_qty: 1, requires_id_check: 0, bundle_price, components };
 }
 
 // GET /api/promos
@@ -115,8 +130,8 @@ router.get('/', requireRole(...MANAGE), async (req, res, next) => {
          FROM web_promo_bundle_item bi
          LEFT JOIN m_product p ON CAST(p.prod_id AS CHAR) = bi.product_id`
     );
-    // nama produk utk b1g1
-    const b1g1Ids = promos.filter((p) => p.type === 'b1g1' && p.product_id).map((p) => p.product_id);
+    // nama produk utk b1g1 & hadiah check-in (keduanya pakai kolom product_id)
+    const b1g1Ids = promos.filter((p) => (p.type === 'b1g1' || p.type === 'checkin_gift') && p.product_id).map((p) => p.product_id);
     let nameById = {};
     if (b1g1Ids.length) {
       const [rows] = await pool.query(
@@ -150,10 +165,10 @@ router.post('/', requireRole(...MANAGE), async (req, res, next) => {
       await assertNoOverlap(conn, b, null, !!b.active);
       const [r] = await conn.query(
         `INSERT INTO web_promo
-           (name, type, product_id, buy_qty, free_qty, bundle_price, active,
+           (name, type, product_id, buy_qty, free_qty, requires_id_check, bundle_price, active,
             start_date, end_date, start_time, end_time, days_of_week, note, created_by_user_id)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-        [b.name, b.type, b.product_id, b.buy_qty, b.free_qty, b.bundle_price, b.active,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [b.name, b.type, b.product_id, b.buy_qty, b.free_qty, b.requires_id_check, b.bundle_price, b.active,
          b.start_date, b.end_date, b.start_time, b.end_time, b.days_of_week, b.note, req.user.user_id]
       );
       const id = r.insertId;
@@ -181,11 +196,11 @@ router.put('/:id', requireRole(...MANAGE), async (req, res, next) => {
       await assertNoOverlap(conn, b, id, !!b.active);
       await conn.query(
         `UPDATE web_promo SET
-           name = ?, type = ?, product_id = ?, buy_qty = ?, free_qty = ?, bundle_price = ?,
-           active = ?, start_date = ?, end_date = ?, start_time = ?, end_time = ?,
+           name = ?, type = ?, product_id = ?, buy_qty = ?, free_qty = ?, requires_id_check = ?,
+           bundle_price = ?, active = ?, start_date = ?, end_date = ?, start_time = ?, end_time = ?,
            days_of_week = ?, note = ?
          WHERE promo_id = ?`,
-        [b.name, b.type, b.product_id, b.buy_qty, b.free_qty, b.bundle_price, b.active,
+        [b.name, b.type, b.product_id, b.buy_qty, b.free_qty, b.requires_id_check, b.bundle_price, b.active,
          b.start_date, b.end_date, b.start_time, b.end_time, b.days_of_week, b.note, id]
       );
       await conn.query('DELETE FROM web_promo_bundle_item WHERE promo_id = ?', [id]);

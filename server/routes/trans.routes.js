@@ -200,6 +200,7 @@ router.post('/buka-kamar', async (req, res, next) => {
       room_id, cust_name, person, waiter_id, member_id, items,
       initial_paid_amount, initial_payment_method, request_key, is_test,
       rate_mode, comp_hours, comp_reason, approver_username, approver_password,
+      id_card_shown,
     } = req.body;
     if (!room_id) throw new AppError(400, 'room_id wajib diisi.');
     // Fallback kalau client lama/lupa kirim request_key: generate acak di server
@@ -276,21 +277,55 @@ router.post('/buka-kamar', async (req, res, next) => {
       }
 
       const priced = await fetchItemsWithPrice(conn, items);
-      const totalFnb = priced.reduce((sum, i) => sum + i.subtotal, 0);
 
-      const member = await getMemberDiscount(conn, member_id);
-      const memberDiscFnb = Math.round((totalFnb * Number(member.disc_fnb_pct)) / 100);
-      const memberDiscRoom = 0; // model harga kamar berbasis threshold, bukan tarif tetap - lihat Open Questions
-
-      // Promo produk (B1G1 / paket) - AUTO-APPLY atas keranjang pembukaan.
-      // Mode Test tidak kena promo. Item gratis TIDAK dihitung utk threshold
-      // (netFnb sudah dikurangi promo).
+      // Promo produk (B1G1 / paket) - AUTO-APPLY atas keranjang pembukaan ASLI
+      // (sebelum item hadiah check-in disisipkan). Mode Test tidak kena promo.
       const promoEval = isTest
         ? { promo_disc_fnb: 0, applied: [] }
         : await promo.evaluateActivePromos(conn, cartFromPriced(priced));
-      const promoDiscFnb = promoEval.promo_disc_fnb;
 
-      const netFnb = totalFnb - memberDiscFnb - promoDiscFnb;
+      // Diskon member dihitung atas item yang DIBAYAR saja (belum termasuk hadiah).
+      const paidFnb = priced.reduce((sum, i) => sum + i.subtotal, 0);
+      const member = await getMemberDiscount(conn, member_id);
+      const memberDiscFnb = Math.round((paidFnb * Number(member.disc_fnb_pct)) / 100);
+      const memberDiscRoom = 0; // model harga kamar berbasis threshold, bukan tarif tetap - lihat Open Questions
+
+      // Promo "Hadiah Check-in" (type 'checkin_gift') - hanya di buka-kamar,
+      // non-test. Item hadiah disisipkan ke `priced` (ikut cetak tiket dapur/
+      // slip gudang + kurangi stok) lalu di-nol-kan lewat promo_disc_fnb, jadi
+      // netFnb & threshold waktu TIDAK terpengaruh.
+      const giftApplied = [];
+      if (!isTest) {
+        const gifts = await promo.evaluateCheckinGifts(conn, { idShown: Boolean(id_card_shown) });
+        for (const g of gifts) {
+          let gp;
+          try {
+            [gp] = await fetchItemsWithPrice(conn, [{ product_id: g.product_id, qty: g.free_qty }]);
+          } catch (e) {
+            // Produk hadiah hilang dari m_product -> jangan gagalkan buka-kamar,
+            // cukup lewati promo hadiah ini.
+            console.warn(`[promo] hadiah check-in "${g.name}" dilewati: ${e.message}`);
+            continue;
+          }
+          priced.push(gp);
+          giftApplied.push({
+            promo_id: g.promo_id,
+            promo_name: g.name,
+            promo_type: 'checkin_gift',
+            discount_amount: gp.subtotal,
+            detail: {
+              product_id: gp.product_id, free_qty: gp.qty, unit_price: gp.price,
+              requires_id_check: g.requires_id_check, id_card_shown: Boolean(id_card_shown),
+            },
+          });
+        }
+      }
+      const giftDisc = giftApplied.reduce((s, a) => s + a.discount_amount, 0);
+
+      const totalFnb = paidFnb + giftDisc; // = SUM(priced.subtotal) termasuk hadiah
+      const promoDiscFnb = promoEval.promo_disc_fnb + giftDisc;
+
+      const netFnb = totalFnb - memberDiscFnb - promoDiscFnb; // hadiah saling hapus
       const window = getWindowForTime();
       // MODE TEST: sengaja TIDAK query m_promo/tax_service sama sekali -
       // skema tabel itu belum pernah diverifikasi (sama seperti kasus
@@ -354,9 +389,8 @@ router.post('/buka-kamar', async (req, res, next) => {
         );
       }
 
-      // Jejak promo yang kena (snapshot utk laporan). promoEval sudah dihitung
-      // dari keranjang yang sama dgn `priced` di atas.
-      for (const a of promoEval.applied) {
+      // Jejak promo yang kena (snapshot utk laporan): B1G1/bundle + hadiah check-in.
+      for (const a of [...promoEval.applied, ...giftApplied]) {
         await conn.query(
           `INSERT INTO web_promo_applied
              (trans_id, promo_id, promo_name, promo_type, discount_amount, detail)
@@ -396,6 +430,7 @@ router.post('/buka-kamar', async (req, res, next) => {
           room_id, totalFnb, memberDiscFnb, thresholdAmount, window, is_test: isTest,
           rate_mode: isComp ? 'comp' : 'threshold',
           ...(isComp ? { comp_hours: compHours, comp_reason: comp_reason || null, comp_approved_by: compApprover.full_name } : {}),
+          ...(giftApplied.length ? { checkin_gifts: giftApplied.map((g) => g.detail.product_id), id_card_shown: Boolean(id_card_shown) } : {}),
         })]
       );
 
@@ -462,7 +497,13 @@ router.post('/buka-kamar', async (req, res, next) => {
         test_expires_at: isTest ? new Date(Date.now() + TEST_MODE_MINUTES * 60000).toISOString() : null,
         test_minutes: isTest ? TEST_MODE_MINUTES : null,
         stock_warnings: stockWarnings,
-        promo_disc_fnb: promoDiscFnb, promos_applied: promoEval.applied,
+        promo_disc_fnb: promoDiscFnb,
+        promos_applied: [...promoEval.applied, ...giftApplied],
+        checkin_gifts: giftApplied.map((g) => ({
+          promo_name: g.promo_name,
+          product_name: (priced.find((p) => p.product_id === g.detail.product_id) || {}).product_name_snapshot || g.detail.product_id,
+          qty: g.detail.free_qty,
+        })),
       };
       await saveIdempotentResponse(conn, 'buka_kamar', requestKey, transId, response);
       return response;

@@ -242,6 +242,15 @@ layar checkout dengan pilihan metode bayar):
   (default 12, bisa diperpanjang lewat "+ Add Time"); VIP diisi batas
   jamnya oleh kasir. Nilai "komplimen" (threshold yang ditanggung) +
   jumlah jam komplimen muncul di laporan Tutup Hari.
+- **Promo** (halaman `/promo.html`, admin/supervisor) auto-apply server saat
+  buka kamar / tambah order kalau sedang berlaku (tanggal + jam + hari):
+  - **B1G1** - beli N produk yang sama, gratis M.
+  - **Paket Harga** - beli satu set komponen, subtotalnya diganti harga paket.
+  - **Hadiah Check-in** - dalam window promo, tamu dapat 1 produk gratis
+    (mis. tahu) saat Buka Kamar. Bila "wajib kartu ID" dicentang di promo,
+    kasir harus mencentang "Tamu menunjukkan kartu ID" di layar Sesi Baru.
+    Item hadiah tetap dibuatkan tiket dapur/slip gudang & mengurangi stok,
+    tapi tidak menambah tagihan atau alokasi waktu karaoke.
 
 Nav sidebar "Inventory" dan "Reports" tampil untuk konsistensi visual
 tapi halamannya masih placeholder ("segera hadir") - belum termasuk MVP.

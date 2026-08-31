@@ -507,6 +507,11 @@
       sessionStorage.removeItem('gr_stock_warn');
       showToast('Stok minus: ' + pendingStockWarn, 'error');
     }
+    const pendingGift = sessionStorage.getItem('gr_gift_note');
+    if (pendingGift) {
+      sessionStorage.removeItem('gr_gift_note');
+      showToast('🎁 Hadiah check-in: ' + pendingGift + ' — sudah masuk pesanan (gratis).');
+    }
 
     load();
     initCatalog();
