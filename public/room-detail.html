@@ -18,6 +18,7 @@
           <span class="pill pill-purple" id="guestPill">-</span>
           <span class="pill pill-cyan" id="typePill">-</span>
           <span class="pill" id="testPill" style="display:none;background:#d97706;color:#fff">🧪 MODE TEST</span>
+          <span class="pill" id="compPill" style="display:none;background:#7c3aed;color:#fff">👑 VIP/VVIP</span>
         </div>
         <div style="font-size:11px;color:var(--text-faint);text-transform:uppercase;letter-spacing:.04em" id="timerLabel">Sisa Waktu</div>
         <div class="timer-big" id="sessionTimer">--:--</div>
@@ -86,16 +87,23 @@
       document.getElementById('guestPill').textContent = `${trans.person || 0} tamu`;
       document.getElementById('typePill').textContent = trans.room_type_snapshot;
       document.getElementById('testPill').style.display = trans.is_test ? 'inline-flex' : 'none';
+      const isComp = trans.rate_mode === 'comp';
+      document.getElementById('compPill').style.display = isComp ? 'inline-flex' : 'none';
       document.getElementById('startedAt').textContent = 'Mulai ' + new Date(trans.start_time).toLocaleTimeString('id-ID');
-      document.getElementById('thresholdText').textContent = `Threshold: ${rupiah(trans.threshold_amount)} (${trans.threshold_window}) · +${trans.extra_hours_used} jam`;
+      document.getElementById('thresholdText').textContent = isComp
+        ? `Komplimen VIP/VVIP: ${trans.comp_hours} jam · +${trans.extra_hours_used} jam tambahan`
+        : `Threshold: ${rupiah(trans.threshold_amount)} (${trans.threshold_window}) · +${trans.extra_hours_used} jam`;
       document.getElementById('invoiceBadge').textContent = trans.trans_id;
       if (time_credit) {
         const th = time_credit.allotted_hours;
+        const alloc = `Alokasi: ${Math.floor(th)}j ${Math.round((th % 1) * 60)}m`;
+        const src = time_credit.rate_mode === 'comp'
+          ? ` (komplimen VIP/VVIP ${time_credit.comp_hours}j` +
+            `${trans.extra_hours_used ? ` + ${trans.extra_hours_used}j tambahan` : ''})`
+          : ` (belanja ${rupiah(time_credit.net_fnb)} @ ${time_credit.hours_per_threshold}j/threshold` +
+            `${trans.extra_hours_used ? ` + ${trans.extra_hours_used}j tambahan` : ''})`;
         document.getElementById('allotInfo').textContent =
-          `Alokasi: ${Math.floor(th)}j ${Math.round((th % 1) * 60)}m` +
-          ` (belanja ${rupiah(time_credit.net_fnb)} @ ${time_credit.hours_per_threshold}j/threshold` +
-          `${trans.extra_hours_used ? ` + ${trans.extra_hours_used}j tambahan` : ''})` +
-          ` · Berakhir ${new Date(time_credit.expires_at).toLocaleTimeString('id-ID')}`;
+          alloc + src + ` · Berakhir ${new Date(time_credit.expires_at).toLocaleTimeString('id-ID')}`;
       }
       renderCountdown();
 

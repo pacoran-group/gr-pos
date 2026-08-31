@@ -5,7 +5,7 @@ const { pool, withTransaction } = require('../config/db');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { AppError } = require('../middleware/errorHandler');
 const { generateTransId } = require('../utils/idGenerator');
-const { getWindowForTime, getThresholdAmount, allottedMs, CREDIT_HOURS_PER_THRESHOLD } = require('../services/threshold.service');
+const { getWindowForTime, getThresholdAmount, allottedMs, CREDIT_HOURS_PER_THRESHOLD, COMP_DEFAULT_HOURS } = require('../services/threshold.service');
 const { queuePrint } = require('../services/printQueue.service');
 const roomPlayer = require('../services/roomPlayer.service');
 const legacyRoomState = require('../services/legacyRoomState.service');
@@ -44,8 +44,21 @@ router.use(requireAuth);
 //   - TIDAK PERNAH mengantre perintah player ke server lama (buka/tutup/batal)
 //   - melewati validasi threshold FnB/pembayaran
 //   - TIDAK memicu print job apa pun (slip gudang/billing/tagihan/tiket dapur)
-// Hanya role di TEST_MODE_ROLES yang boleh mengaktifkannya.
-const TEST_MODE_ROLES = ['admin', 'supervisor'];
+// Hanya role di TEST_MODE_ROLES yang boleh mengaktifkannya. Kasir DImasukkan
+// (31 Agustus 2026): kasir memang perlu mencoba room ~15 menit di terminalnya
+// sendiri tanpa harus memanggil SPV/admin.
+const TEST_MODE_ROLES = ['kasir', 'supervisor', 'admin'];
+
+// =====================================================================
+// COMP ROOM - VIP / VVIP (31 Agustus 2026) - lihat migration 010_comp_room.sql.
+// Buka kamar TANPA memenuhi threshold F&B, dengan alokasi waktu MANUAL
+// (comp_hours). Beda dari Mode Test: sesi ini NYATA - player 154 nyala,
+// struk & tiket tercetak, stok bergerak, tagihan akhir menagih konsumsi asli.
+// Wajib otorisasi admin/supervisor (verifyApprover, sama seperti Void).
+// VVIP = comp_hours default (COMP_DEFAULT_HOURS); VIP = kasir isi jamnya.
+// Keduanya bisa diperpanjang lewat "+ Add Time".
+// =====================================================================
+const COMP_MAX_HOURS = 24;
 
 async function fetchItemsWithPrice(conn, items) {
   if (!items || !items.length) return [];
@@ -181,16 +194,24 @@ async function fetchLocalPrintJobs(conn, transId) {
 // =====================================================================
 router.post('/buka-kamar', async (req, res, next) => {
   try {
-    const { room_id, cust_name, person, waiter_id, member_id, items, initial_paid_amount, initial_payment_method, request_key, is_test } = req.body;
+    const {
+      room_id, cust_name, person, waiter_id, member_id, items,
+      initial_paid_amount, initial_payment_method, request_key, is_test,
+      rate_mode, comp_hours, comp_reason, approver_username, approver_password,
+    } = req.body;
     if (!room_id) throw new AppError(400, 'room_id wajib diisi.');
     // Fallback kalau client lama/lupa kirim request_key: generate acak di server
     // - tidak memberi proteksi idempotency (tidak ada nilai utk dicocokkan di
     // retry berikutnya), tapi tidak memblokir alur (lihat getIdempotentResponse).
     const requestKey = request_key || crypto.randomUUID();
 
-    const isTest = Boolean(is_test);
+    const isComp = rate_mode === 'comp';
+    const isTest = Boolean(is_test) && !isComp; // comp menang kalau keduanya terkirim
+    if (Boolean(is_test) && isComp) {
+      throw new AppError(400, 'Tidak bisa memakai Mode Test dan VIP/VVIP sekaligus.');
+    }
     if (isTest && !TEST_MODE_ROLES.includes(req.user.role)) {
-      throw new AppError(403, 'Mode Test hanya bisa dipakai oleh admin/supervisor.');
+      throw new AppError(403, 'Mode Test hanya bisa dipakai oleh kasir/supervisor/admin.');
     }
 
     const result = await withTransaction(async (conn) => {
@@ -267,9 +288,26 @@ router.post('/buka-kamar', async (req, res, next) => {
       // skema tabel itu belum pernah diverifikasi (sama seperti kasus
       // m_product dulu), jadi Mode Test dibuat tidak bergantung padanya
       // supaya tidak ikut gagal kalau skemanya ternyata beda.
+      // COMP (VIP/VVIP): threshold_amount TETAP dihitung dengan nilai asli
+      // (bukan 0) supaya laporan Tutup Hari bisa menampilkan nilai komplimen
+      // yang ditanggung - hanya GATE-nya yang dilewati di bawah.
       const thresholdAmount = isTest ? 0 : await getThresholdAmount(conn, room.room_type, window);
 
-      if (!isTest && netFnb < thresholdAmount) {
+      // COMP: verifikasi otorisasi admin/supervisor & tentukan alokasi jam.
+      let compApprover = null;
+      let compHours = null;
+      if (isComp) {
+        compApprover = await verifyApprover(conn, approver_username, approver_password);
+        const raw = comp_hours === undefined || comp_hours === null || comp_hours === ''
+          ? COMP_DEFAULT_HOURS
+          : Number(comp_hours);
+        if (!(raw > 0) || raw > COMP_MAX_HOURS) {
+          throw new AppError(400, `comp_hours harus antara 0 dan ${COMP_MAX_HOURS} jam.`);
+        }
+        compHours = raw;
+      }
+
+      if (!isTest && !isComp && netFnb < thresholdAmount) {
         throw new AppError(
           400,
           `Belum memenuhi threshold. Total pesanan Rp${netFnb.toLocaleString('id-ID')}, ` +
@@ -286,12 +324,15 @@ router.post('/buka-kamar', async (req, res, next) => {
           (trans_id, room_id, room_type_snapshot, cust_name, person, waiter_id, member_id,
            member_disc_room, member_disc_fnb, promo_disc_fnb, initial_paid_amount, initial_payment_method,
            threshold_window, threshold_amount, status, service_charge_pct, is_test,
+           rate_mode, comp_hours, comp_reason, comp_approved_by_user_id,
            opened_by_user_id, opened_at_terminal, start_time)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, NOW())`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
         [
           transId, room_id, room.room_type, cust_name || 'MR. GUEST', Number(person) || 0,
           waiter_id || null, member_id || null, memberDiscRoom, memberDiscFnb, promoDiscFnb, paidAmount,
           initial_payment_method || 'cash', window, thresholdAmount, serviceChargePct, isTest ? 1 : 0,
+          isComp ? 'comp' : 'threshold', compHours, isComp ? (comp_reason || null) : null,
+          compApprover ? compApprover.user_id : null,
           req.user.user_id, req.terminalId,
         ]
       );
@@ -340,7 +381,11 @@ router.post('/buka-kamar', async (req, res, next) => {
       await conn.query(
         `INSERT INTO web_tr_trans_history (trans_id, action, user_id, terminal_id, detail)
          VALUES (?, 'buka_kamar', ?, ?, ?)`,
-        [transId, req.user.user_id, req.terminalId, JSON.stringify({ room_id, totalFnb, memberDiscFnb, thresholdAmount, window, is_test: isTest })]
+        [transId, req.user.user_id, req.terminalId, JSON.stringify({
+          room_id, totalFnb, memberDiscFnb, thresholdAmount, window, is_test: isTest,
+          rate_mode: isComp ? 'comp' : 'threshold',
+          ...(isComp ? { comp_hours: compHours, comp_reason: comp_reason || null, comp_approved_by: compApprover.full_name } : {}),
+        })]
       );
 
       // MODE TEST: tidak ada print job sama sekali (slip gudang/billing/tiket
@@ -374,6 +419,8 @@ router.post('/buka-kamar', async (req, res, next) => {
             promo_disc_fnb: promoDiscFnb,
             paid_amount: paidAmount,
             payment_method: initial_payment_method || 'cash',
+            rate_mode: isComp ? 'comp' : 'threshold',
+            comp_note: isComp ? `VIP/VVIP - tanpa minimum F&B - alokasi ${compHours} jam` : null,
           },
         });
         // Tiket dapur - HANYA item yang perlu dimasak (needs_cooking = 1).
@@ -400,6 +447,7 @@ router.post('/buka-kamar', async (req, res, next) => {
       const printJobs = await fetchLocalPrintJobs(conn, transId);
       const response = {
         trans_id: transId, room_name: room.room_name, print_jobs: printJobs, is_test: isTest,
+        rate_mode: isComp ? 'comp' : 'threshold', comp_hours: compHours,
         stock_warnings: stockWarnings,
         promo_disc_fnb: promoDiscFnb, promos_applied: promoEval.applied,
       };
@@ -826,7 +874,9 @@ router.post('/:id/tambah-jam', async (req, res, next) => {
       // Item promo (gratis) tidak dihitung utk threshold - lihat migration 009.
       const totalFnb = Number(sumRows[0].total) - Number(trans.member_disc_fnb) - Number(trans.promo_disc_fnb || 0);
 
-      if (totalFnb < Number(trans.threshold_amount)) {
+      // COMP (VIP/VVIP): gate threshold TIDAK berlaku - perpanjangan bebas
+      // (kasir/SPV yang menilai). Mode threshold: tetap harus tercapai dulu.
+      if (trans.rate_mode !== 'comp' && totalFnb < Number(trans.threshold_amount)) {
         throw new AppError(
           400,
           `Threshold belum tercapai (Rp${totalFnb.toLocaleString('id-ID')} / Rp${Number(trans.threshold_amount).toLocaleString('id-ID')}). Tambah jam belum diperbolehkan.`
@@ -1014,8 +1064,10 @@ router.get('/:id', async (req, res, next) => {
     const netFnb = fnbGross - Number(trans.member_disc_fnb || 0) - Number(trans.promo_disc_fnb || 0);
     const totalMs = allottedMs({
       netFnb, thresholdAmount: trans.threshold_amount, extraHours: trans.extra_hours_used,
+      rateMode: trans.rate_mode, compHours: trans.comp_hours,
     });
-    // Mode Test tidak punya alokasi waktu (threshold 0).
+    // Mode Test tidak punya alokasi waktu (threshold 0). COMP: alokasi dari
+    // comp_hours (VIP/VVIP), threshold_amount hanya sbg nilai komplimen.
     const time_credit = trans.is_test
       ? null
       : {
@@ -1024,6 +1076,8 @@ router.get('/:id', async (req, res, next) => {
           allotted_hours: totalMs / 3600000,
           expires_at: new Date(new Date(trans.start_time).getTime() + totalMs).toISOString(),
           hours_per_threshold: CREDIT_HOURS_PER_THRESHOLD,
+          rate_mode: trans.rate_mode,
+          comp_hours: trans.comp_hours == null ? null : Number(trans.comp_hours),
         };
     res.json({ trans, details, extra_hours: extraHours, time_credit, promos_applied: promosApplied });
   } catch (err) {

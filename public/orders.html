@@ -32,10 +32,29 @@
             <label class="field-label">Jumlah Orang</label>
             <input class="field" id="person" type="number" min="0" value="0" />
             <label class="field-label" id="testModeWrap" style="display:none;margin-top:10px">
-              <input type="checkbox" id="isTestMode" /> Mode Test (admin/supervisor)
+              <input type="checkbox" id="isTestMode" /> Mode Test
             </label>
             <div id="testModeNote" style="display:none;font-size:11px;color:#d97706;margin-top:4px">
               Mode Test aktif — kamar TIDAK tercatat terisi di status kamar asli (aman dari bentrok dengan sistem lama), threshold &amp; pembayaran dilewati, dan tidak ada struk yang tercetak.
+            </div>
+
+            <label class="field-label" id="rateModeWrap" style="display:none;margin-top:10px">Tarif Kamar</label>
+            <select class="field" id="rateMode" style="display:none">
+              <option value="normal">Normal — minimum F&amp;B</option>
+              <option value="vip">VIP — tanpa minimum F&amp;B, batas jam manual</option>
+              <option value="vvip">VVIP — tanpa minimum F&amp;B, 12 jam (bisa diperpanjang)</option>
+            </select>
+            <div id="compBox" style="display:none;border:1px solid var(--border,#333);border-radius:8px;padding:10px;margin-top:8px">
+              <div style="font-size:11px;color:#a855f7;margin-bottom:6px">👑 Buka tanpa minimum F&amp;B — butuh otorisasi admin/supervisor. Sesi tetap nyata (player, struk, stok, tagihan konsumsi).</div>
+              <label class="field-label" id="compHoursWrap">Batas waktu (jam)</label>
+              <input class="field" id="compHours" type="number" min="0.5" max="24" step="0.5" value="3" />
+              <label class="field-label">Alasan</label>
+              <input class="field" id="compReason" placeholder="mis. Tamu VVIP Bpk. X" />
+              <div class="auth-sep">Otorisasi Admin / Supervisor</div>
+              <label class="field-label">Username</label>
+              <input class="field" id="compApprUser" autocomplete="off" />
+              <label class="field-label">Password</label>
+              <input class="field" id="compApprPass" type="password" autocomplete="off" />
             </div>
           </div>
 
@@ -119,15 +138,25 @@
       if (mode === 'new') {
         document.getElementById('sessionForm').style.display = 'block';
         document.getElementById('cartTitle').textContent = 'Sesi Baru';
-        // Mode Test hanya ditawarkan ke admin/supervisor - lihat catatan
-        // TEST_MODE_ROLES di trans.routes.js. Kasir biasa tidak melihat opsi ini.
+        // Mode Test: kasir/supervisor/admin (lihat TEST_MODE_ROLES di
+        // trans.routes.js). Kasir memang perlu mencoba room ~15 menit sendiri.
         const currentUser = getUser();
-        if (currentUser && ['admin', 'supervisor'].includes(currentUser.role)) {
+        if (currentUser && ['admin', 'supervisor', 'kasir'].includes(currentUser.role)) {
           document.getElementById('testModeWrap').style.display = 'block';
           document.getElementById('isTestMode').addEventListener('change', (e) => {
             document.getElementById('testModeNote').style.display = e.target.checked ? 'block' : 'none';
+            if (e.target.checked) {
+              document.getElementById('rateMode').value = 'normal';
+              syncRateModeUI();
+            }
           });
         }
+
+        // Tarif VIP/VVIP - siapa pun boleh MEMULAI, tapi wajib password
+        // admin/supervisor di dalam compBox (diverifikasi server: verifyApprover).
+        document.getElementById('rateModeWrap').style.display = 'block';
+        document.getElementById('rateMode').style.display = 'block';
+        document.getElementById('rateMode').addEventListener('change', syncRateModeUI);
         try { await Api.softLock(roomId); } catch (e) { /* ignore */ }
         // Fitur member DIHILANGKAN sementara (27 Agustus 2026, atas permintaan
         // user) - skema m_member belum diverifikasi & tidak dipakai dulu.
@@ -308,11 +337,40 @@
       renderThresholdInfo(total);
     }
 
+    // Tarif VIP/VVIP dipilih? (mode 'comp' - buka tanpa minimum F&B)
+    function compSelected() {
+      const el = document.getElementById('rateMode');
+      return !!el && (el.value === 'vip' || el.value === 'vvip');
+    }
+
+    // Sinkronkan tampilan compBox + kunci jam utk VVIP (12j, terkunci).
+    function syncRateModeUI() {
+      const v = document.getElementById('rateMode').value;
+      const isComp = v === 'vip' || v === 'vvip';
+      document.getElementById('compBox').style.display = isComp ? 'block' : 'none';
+      const hoursEl = document.getElementById('compHours');
+      const hoursWrap = document.getElementById('compHoursWrap');
+      if (v === 'vvip') {
+        hoursEl.value = 12; hoursEl.disabled = true;
+        hoursWrap.style.display = 'none'; hoursEl.style.display = 'none';
+      } else {
+        hoursEl.disabled = false;
+        hoursWrap.style.display = 'block'; hoursEl.style.display = 'block';
+      }
+      // Mode Test & comp saling eksklusif.
+      const testEl = document.getElementById('isTestMode');
+      if (isComp && testEl && testEl.checked) {
+        testEl.checked = false;
+        document.getElementById('testModeNote').style.display = 'none';
+      }
+      renderThresholdInfo(cart.reduce((s, l) => s + l.price * l.qty, 0));
+    }
+
     // Panel "threshold & waktu" di keranjang - biar kasir & tamu tahu belanja
     // saat ini sudah dapat berapa jam, dan pancingan up-sell ke jam berikutnya.
     function renderThresholdInfo(cartTotal = 0) {
       const box = document.getElementById('thresholdInfo');
-      if (!roomThreshold || mode === 'pick') { box.style.display = 'none'; return; }
+      if (!roomThreshold || mode === 'pick' || compSelected()) { box.style.display = 'none'; return; }
       const fnb = existingFnb + cartTotal;
       const hours = hoursPerThreshold * (fnb / roomThreshold);
       const hh = Math.floor(hours);
@@ -350,14 +408,36 @@
       try {
         if (mode === 'new') {
           const testModeEl = document.getElementById('isTestMode');
+          const rateModeVal = document.getElementById('rateMode') ? document.getElementById('rateMode').value : 'normal';
+          const isComp = rateModeVal === 'vip' || rateModeVal === 'vvip';
           const payload = {
             room_id: roomId,
             cust_name: document.getElementById('custName').value.trim() || 'MR. GUEST',
             person: Number(document.getElementById('person').value) || 0,
             member_id: null, // fitur member dihilangkan sementara - lihat catatan di init()
             items,
-            is_test: Boolean(testModeEl && testModeEl.checked),
+            is_test: !isComp && Boolean(testModeEl && testModeEl.checked),
           };
+          if (isComp) {
+            const compReason = document.getElementById('compReason').value.trim();
+            const apprUser = document.getElementById('compApprUser').value.trim();
+            const apprPass = document.getElementById('compApprPass').value;
+            const compHours = rateModeVal === 'vvip' ? 12 : Number(document.getElementById('compHours').value);
+            if (rateModeVal === 'vip' && !(compHours > 0 && compHours <= 24)) {
+              errEl.textContent = 'Batas waktu VIP harus antara 0 dan 24 jam.'; errEl.style.display = 'block'; btn.disabled = false; return;
+            }
+            if (!compReason) {
+              errEl.textContent = 'Alasan VIP/VVIP wajib diisi.'; errEl.style.display = 'block'; btn.disabled = false; return;
+            }
+            if (!apprUser || !apprPass) {
+              errEl.textContent = 'Username & password admin/supervisor wajib diisi untuk buka VIP/VVIP.'; errEl.style.display = 'block'; btn.disabled = false; return;
+            }
+            payload.rate_mode = 'comp';
+            payload.comp_hours = compHours;
+            payload.comp_reason = compReason;
+            payload.approver_username = apprUser;
+            payload.approver_password = apprPass;
+          }
           const result = await Api.bukaKamar(payload, requestKey);
           await printJobsSafely(result.print_jobs);
           stashStockWarn(result.stock_warnings);

@@ -76,6 +76,7 @@ async function computeReport(businessDateStr, conn = pool) {
             t.waiter_id, t.member_id, t.member_disc_fnb, t.member_disc_room, t.promo_disc_fnb,
             t.service_charge_pct, t.initial_paid_amount, t.initial_payment_method,
             t.final_payment_method, t.extra_hours_used,
+            t.rate_mode, t.comp_hours, t.threshold_amount,
             t.opened_by_user_id, t.closed_by_user_id, t.start_time, t.end_time,
             ou.full_name AS opened_by_name, cu.full_name AS closed_by_name,
             COALESCE(r.room_name, CONCAT('Room ', t.room_id)) AS room_name,
@@ -152,6 +153,9 @@ async function computeReport(businessDateStr, conn = pool) {
     initial_paid_total: 0,
     sisa_bayar_total: 0,
   };
+  // Sesi komplimen VIP/VVIP (rate_mode='comp'): dihitung terpisah utk
+  // visibilitas manajemen. comp_value = threshold_amount yang "ditanggung".
+  const comp = { count: 0, hours: 0, value: 0 };
 
   for (const row of txRows) {
     const bill = computeBill(row, [{ subtotal: row.fnb_gross }]);
@@ -171,12 +175,20 @@ async function computeReport(businessDateStr, conn = pool) {
       start_time: fmtDT(row.start_time),
       end_time: fmtDT(row.end_time),
       extra_hours_used: row.extra_hours_used,
+      rate_mode: row.rate_mode || 'threshold',
+      comp_hours: row.comp_hours == null ? '' : Number(row.comp_hours),
       initial_payment_method: row.initial_payment_method || null,
       final_payment_method: row.final_payment_method || null,
       ...bill,
       collected,
     };
     transactions.push(tx);
+
+    if (row.rate_mode === 'comp') {
+      comp.count += 1;
+      comp.hours += Number(row.comp_hours || 0) + Number(row.extra_hours_used || 0);
+      comp.value += Number(row.threshold_amount || 0);
+    }
 
     sum.fnb_gross += bill.fnb_gross;
     sum.disc_total += bill.disc_total;
@@ -233,6 +245,9 @@ async function computeReport(businessDateStr, conn = pool) {
     collected_total,
     collected_vs_grand_gap: collected_total - sum.net_revenue,
     avg_per_txn: txRows.length ? Math.round(sum.net_revenue / txRows.length) : 0,
+    comp_count: comp.count,
+    comp_hours_total: comp.hours,
+    comp_value_total: comp.value,
   };
 
   const payment_mix = ['tunai', 'qris', 'kartu', 'lainnya'].map((m) => ({
@@ -339,7 +354,8 @@ async function generateAndPersist(businessDateStr, userId) {
 const CSV_COLUMNS = [
   'business_date', 'trans_id', 'room_name', 'room_id', 'room_type_snapshot',
   'cust_name', 'person', 'opened_by_name', 'closed_by_name', 'start_time', 'end_time',
-  'extra_hours_used', 'fnb_gross', 'member_disc_fnb', 'member_disc_room', 'promo_disc_fnb', 'disc_total',
+  'rate_mode', 'comp_hours', 'extra_hours_used',
+  'fnb_gross', 'member_disc_fnb', 'member_disc_room', 'promo_disc_fnb', 'disc_total',
   'net_fnb', 'service_charge_pct', 'service_charge', 'grand_total', 'initial_paid_amount',
   'initial_payment_method', 'sisa_bayar', 'final_payment_method', 'member_id', 'waiter_id',
 ];
@@ -407,6 +423,9 @@ function renderHtmlEmail(report) {
       ['F&amp;B bersih', rp(s.net_fnb)],
       ['Service charge', rp(s.service_charge_total)],
       ['<b>Pendapatan (grand total)</b>', '<b>' + rp(s.net_revenue) + '</b>'],
+      ['Sesi komplimen VIP/VVIP', (s.comp_count || 0).toLocaleString('id-ID')],
+      ['Jam komplimen diberikan', (s.comp_hours_total || 0).toLocaleString('id-ID') + ' jam'],
+      ['Nilai komplimen (threshold ditanggung)', rp(s.comp_value_total || 0)],
       ['Deposit diterima', rp(s.initial_paid_total)],
       ['Pelunasan diterima', rp(s.sisa_bayar_total)],
       ['Total terkumpul', rp(s.collected_total)],

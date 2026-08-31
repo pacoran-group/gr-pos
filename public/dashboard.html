@@ -66,6 +66,8 @@
             const at = r.active_trans;
             if (at.is_test) {
               body += `<div class="lock-note" style="color:#d97706;font-weight:600">🧪 MODE TEST — bukan tamu sungguhan</div>`;
+            } else if (at.rate_mode === 'comp') {
+              body += `<div class="lock-note" style="color:#a855f7;font-weight:600">👑 VIP/VVIP — tanpa minimum F&B</div>`;
             }
             const cd = at.expires_at ? formatCountdown(at.expires_at) : { text: formatDuration(at.start_time), overtime: false };
             body += `<div class="timer${cd.overtime ? ' overtime' : ''}" data-expires="${at.expires_at || ''}">${cd.text}</div>`;

@@ -48,6 +48,7 @@ router.get('/', async (req, res, next) => {
     // lihat threshold.service.js: allottedMs).
     const [activeTrans] = await pool.query(
       `SELECT t.trans_id, t.room_id, t.cust_name, t.person, t.start_time, t.is_test,
+              t.rate_mode, t.comp_hours,
               t.threshold_amount, t.member_disc_fnb, t.extra_hours_used,
               COALESCE(SUM(d.subtotal), 0) AS fnb_gross
        FROM web_tr_trans t
@@ -62,8 +63,11 @@ router.get('/', async (req, res, next) => {
           netFnb,
           thresholdAmount: t.threshold_amount,
           extraHours: t.extra_hours_used,
+          rateMode: t.rate_mode,
+          compHours: t.comp_hours,
         });
         // Mode Test: threshold_amount = 0, tidak ada alokasi waktu -> null.
+        // COMP (VIP/VVIP): expires_at dihitung dari comp_hours.
         const expiresAt = t.is_test
           ? null
           : new Date(new Date(t.start_time).getTime() + totalMs).toISOString();
@@ -76,6 +80,8 @@ router.get('/', async (req, res, next) => {
             person: t.person,
             start_time: t.start_time,
             is_test: t.is_test,
+            rate_mode: t.rate_mode,
+            comp_hours: t.comp_hours == null ? null : Number(t.comp_hours),
             net_fnb: netFnb,
             threshold_amount: Number(t.threshold_amount),
             extra_hours_used: t.extra_hours_used,

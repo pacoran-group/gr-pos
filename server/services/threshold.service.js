@@ -42,17 +42,32 @@ async function getThresholdAmount(conn, roomType, window) {
 // Ditambah jam gratis dari tombol "+ Add Time" (extra_hours_used).
 const CREDIT_HOURS_PER_THRESHOLD = Number(process.env.CREDIT_HOURS_PER_THRESHOLD || 2);
 
+// Default jam untuk room komplimen VVIP (mode 'comp' tanpa jam manual). VIP
+// mengisi jam sendiri. Keduanya bisa diperpanjang lewat "+ Add Time".
+const COMP_DEFAULT_HOURS = Number(process.env.COMP_DEFAULT_HOURS || 12);
+
 /**
  * @param {object} p
  * @param {number} p.netFnb - total FnB setelah diskon member
  * @param {number} p.thresholdAmount - threshold kamar (snapshot di web_tr_trans)
  * @param {number} [p.extraHours=0] - web_tr_trans.extra_hours_used
+ * @param {'threshold'|'comp'} [p.rateMode='threshold'] - web_tr_trans.rate_mode
+ * @param {number|null} [p.compHours=null] - web_tr_trans.comp_hours (mode 'comp')
  * @returns {number} total waktu yang didapat dalam milidetik (sejak start_time)
  */
-function allottedMs({ netFnb, thresholdAmount, extraHours = 0 }) {
+function allottedMs({ netFnb, thresholdAmount, extraHours = 0, rateMode = 'threshold', compHours = null }) {
+  const extra = Number(extraHours) || 0;
+  if (rateMode === 'comp') {
+    // Comp (VIP/VVIP): waktu dari comp_hours yang ditetapkan kasir/approver,
+    // BUKAN proporsional belanja F&B. Ditambah jam dari tombol "+ Add Time".
+    return Math.round(((Number(compHours) || 0) + extra) * 3600000);
+  }
   const t = Number(thresholdAmount) || 0;
   const base = t > 0 ? CREDIT_HOURS_PER_THRESHOLD * (Number(netFnb) / t) : 0;
-  return Math.round((base + (Number(extraHours) || 0)) * 3600000);
+  return Math.round((base + extra) * 3600000);
 }
 
-module.exports = { getWindowForTime, getThresholdAmount, allottedMs, CREDIT_HOURS_PER_THRESHOLD };
+module.exports = {
+  getWindowForTime, getThresholdAmount, allottedMs,
+  CREDIT_HOURS_PER_THRESHOLD, COMP_DEFAULT_HOURS,
+};

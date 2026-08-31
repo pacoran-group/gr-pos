@@ -109,6 +109,8 @@
         ['Diskon', '-' + rp(s.disc_total), false],
         ['Terkumpul', rp(s.collected_total), false],
         ['Selisih terkumpul', rp(s.collected_vs_grand_gap), s.collected_vs_grand_gap !== 0],
+        ['Komplimen VIP/VVIP', `${Number(s.comp_count || 0)} sesi · ${Number(s.comp_hours_total || 0)} jam`, false],
+        ['Nilai komplimen', rp(s.comp_value_total || 0), false],
       ].map(([k, v, warn]) => `<div class="rep-card"><div class="k">${k}</div><div class="v ${warn ? 'warn' : ''}">${v}</div></div>`).join('');
 
       const pay = tbl(['Metode', 'Transaksi', 'Nilai'],
