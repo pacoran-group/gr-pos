@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Laporan Void - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+<script src="/js/theme-boot.js"></script>
+<style>
+  .vr-toolbar { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 16px; }
+  .vr-toolbar label { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+  .vr-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 4px 0 18px; }
+  .vr-card { background: var(--card-inset); border: 1px solid var(--border-soft); border-radius: 10px; padding: 12px 14px; }
+  .vr-card .k { font-size: 11px; color: var(--text-muted); }
+  .vr-card .v { font-size: 20px; font-weight: 800; margin-top: 3px; }
+  .vr-card .v.warn { color: var(--red); }
+  .muted-note { font-size: 11.5px; color: var(--text-muted); }
+  .vr-kasir { border: 1px solid var(--border-soft); border-radius: 12px; padding: 14px 16px; margin-top: 14px; }
+  .vr-kasir-head { display: flex; justify-content: space-between; align-items: baseline; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+  .vr-kasir-head .name { font-weight: 800; font-size: 15px; }
+  .vr-kasir-head .stat { font-size: 12px; color: var(--text-muted); }
+  .vr-kasir-head .stat b { color: var(--red); }
+  td.reason { color: var(--text-muted); }
+</style>
+</head>
+<body>
+  <div id="shell"></div>
+  <div id="pageContent">
+    <div id="vrGate" style="display:none" class="card">Halaman ini khusus admin / supervisor.</div>
+
+    <div id="vrMain" style="display:none">
+      <div class="card">
+        <div class="vr-toolbar">
+          <div>
+            <label for="vrFrom">Dari tanggal usaha</label>
+            <input type="date" id="vrFrom" class="field" />
+          </div>
+          <div>
+            <label for="vrTo">Sampai tanggal usaha</label>
+            <input type="date" id="vrTo" class="field" />
+          </div>
+          <button class="btn btn-primary" id="btnShow">Tampilkan</button>
+          <button class="btn btn-outline" id="btnCsv">Unduh CSV</button>
+          <span class="muted-note" id="vrRange"></span>
+        </div>
+
+        <div id="vrWrap"><p class="muted-note">Pilih rentang tanggal lalu tekan Tampilkan.</p></div>
+      </div>
+      <p class="muted-note" style="margin-top:10px">
+        "Kasir" = petugas yang <b>membuka sesi kamar</b> tempat item itu di-void (bukan yang menekan tombol void — void sekarang khusus admin).
+        Rentang tanggal mengikuti hari usaha (pergantian hari jam 05:00), sama seperti Tutup Hari.
+      </p>
+    </div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script>
+    renderLayout({ active: 'laporan-void', title: 'Laporan Void', subtitle: 'Item dibatalkan, per kasir' });
+
+    const allowed = ['admin', 'supervisor'].includes((getUser() || {}).role);
+    if (!allowed) {
+      document.getElementById('vrGate').style.display = 'block';
+    } else {
+      document.getElementById('vrMain').style.display = 'block';
+    }
+
+    function rp(n) { return 'Rp' + Number(n || 0).toLocaleString('id-ID'); }
+    function escHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function localDateStr(d) {
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    // Default rentang: hari usaha ini (cutoff 05:00) untuk from & to.
+    function defBusinessDate() {
+      const d = new Date();
+      if (d.getHours() < 5) d.setDate(d.getDate() - 1);
+      return localDateStr(d);
+    }
+
+    const fromEl = document.getElementById('vrFrom');
+    const toEl = document.getElementById('vrTo');
+    if (allowed) {
+      const d0 = defBusinessDate();
+      const weekAgo = new Date(); weekAgo.setDate(weekAgo.getDate() - 6);
+      fromEl.value = localDateStr(weekAgo);
+      toEl.value = d0;
+    }
+
+    function kasirBlock(k) {
+      const rows = k.items.map((x) => `
+        <tr>
+          <td>${escHtml(x.created_at)}</td>
+          <td>${escHtml(x.room_name)}</td>
+          <td>${escHtml(x.product_name)}</td>
+          <td class="num">${x.void_qty}</td>
+          <td class="num">${rp(x.subtotal_voided)}</td>
+          <td class="reason">${escHtml(x.reason || '—')}</td>
+          <td>${escHtml(x.approved_by_name || '')}</td>
+          <td>${escHtml(x.trans_id)}</td>
+        </tr>`).join('');
+      return `
+        <div class="vr-kasir">
+          <div class="vr-kasir-head">
+            <span class="name">${escHtml(k.kasir_name)}</span>
+            <span class="stat">${k.void_count} void · ${k.void_qty} pcs · <b>${rp(k.void_value)}</b></span>
+          </div>
+          <div style="overflow-x:auto">
+            <table class="summary-table">
+              <thead><tr>
+                <th>Waktu</th><th>Room</th><th>Produk</th><th class="num">Qty</th>
+                <th class="num">Nilai</th><th>Alasan</th><th>Di-void oleh</th><th>Trans</th>
+              </tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        </div>`;
+    }
+
+    function render(data) {
+      const wrap = document.getElementById('vrWrap');
+      document.getElementById('vrRange').textContent = `${data.from} s/d ${data.to}`;
+      const s = data.summary;
+      const cards = `
+        <div class="vr-cards">
+          <div class="vr-card"><div class="k">Total item di-void</div><div class="v">${s.total_voids}</div></div>
+          <div class="vr-card"><div class="k">Total qty</div><div class="v">${s.total_qty}</div></div>
+          <div class="vr-card"><div class="k">Total nilai</div><div class="v warn">${rp(s.total_value)}</div></div>
+          <div class="vr-card"><div class="k">Jumlah kasir terlibat</div><div class="v">${s.distinct_kasir}</div></div>
+        </div>`;
+      if (!data.by_kasir.length) {
+        wrap.innerHTML = cards + '<p class="muted-note">Tidak ada void pada rentang ini.</p>';
+        return;
+      }
+      wrap.innerHTML = cards + data.by_kasir.map(kasirBlock).join('');
+    }
+
+    async function load() {
+      const from = fromEl.value;
+      const to = toEl.value;
+      if (!from || !to) return;
+      const wrap = document.getElementById('vrWrap');
+      wrap.innerHTML = '<p class="muted-note">Memuat…</p>';
+      try {
+        const data = await Api.getVoidReport(from, to);
+        render(data);
+      } catch (err) {
+        wrap.innerHTML = `<p class="error-text" style="display:block">${escHtml(err.message)}</p>`;
+      }
+    }
+
+    if (allowed) {
+      document.getElementById('btnShow').addEventListener('click', load);
+      document.getElementById('btnCsv').addEventListener('click', async () => {
+        try {
+          await Api.downloadVoidCsv(fromEl.value, toEl.value);
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+      });
+      load();
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Analitik - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+<script src="/js/theme-boot.js"></script>
+<style>
+  .an-toolbar { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 16px; }
+  .an-toolbar label { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+  .an-toolbar input[type="date"] { padding: 7px 9px; }
+
+  .an-kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .an-kpi { background: var(--card-inset); border: 1px solid var(--border-soft); border-radius: 10px; padding: 12px 14px; }
+  .an-kpi .k { font-size: 11px; color: var(--text-muted); }
+  .an-kpi .v { font-size: 19px; font-weight: 800; margin-top: 3px; }
+  .an-kpi .s { font-size: 11px; color: var(--text-faint); margin-top: 2px; }
+
+  .an-insights { background: var(--cyan-dim); border: 1px solid var(--border); border-radius: 12px; padding: 14px 18px; margin-bottom: 20px; }
+  .an-insights h4 { margin: 0 0 8px; font-size: 13px; }
+  .an-insights ul { margin: 0; padding-left: 18px; }
+  .an-insights li { font-size: 13px; margin: 4px 0; }
+
+  .an-sec { margin-bottom: 24px; }
+  .an-sec > h4 { margin: 0 0 10px; font-size: 13.5px; }
+  .an-grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 900px) { .an-grid2 { grid-template-columns: 1fr; } }
+
+  /* Bar chart pendapatan/hari */
+  .barchart { display: flex; align-items: flex-end; gap: 6px; height: 180px; padding-top: 6px; }
+  .barchart .bar-wrap { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; min-width: 0; }
+  .barchart .bar { width: 100%; max-width: 46px; background: var(--cyan); border-radius: 4px 4px 0 0; transition: opacity .15s; }
+  .barchart .bar.weekend { background: var(--pink); }
+  .barchart .bar:hover { opacity: .75; }
+  .barchart .bl { font-size: 9.5px; color: var(--text-faint); margin-top: 4px; text-align: center; white-space: nowrap; }
+  .chart-note { font-size: 11px; color: var(--text-faint); margin-top: 6px; }
+
+  /* Heatmap jam x hari */
+  .heat { display: grid; grid-template-columns: 42px repeat(24, 1fr); gap: 2px; }
+  .heat .hh { font-size: 9px; color: var(--text-faint); text-align: center; }
+  .heat .rl { font-size: 10px; color: var(--text-muted); display: flex; align-items: center; }
+  .heat .cell { aspect-ratio: 1 / 1; border-radius: 2px; background: var(--card-inset); }
+  .heat .cell.on { background: var(--cyan); }
+  .heat-legend { display: flex; align-items: center; gap: 6px; font-size: 11px; color: var(--text-faint); margin-top: 8px; }
+  .heat-legend .sw { width: 14px; height: 14px; border-radius: 3px; background: var(--cyan); }
+
+  /* Distribusi jam */
+  .hourbars { display: flex; align-items: flex-end; gap: 3px; height: 90px; }
+  .hourbars .hb { flex: 1; background: var(--purple); border-radius: 2px 2px 0 0; min-height: 2px; }
+  .hourbars-x { display: flex; gap: 3px; margin-top: 3px; }
+  .hourbars-x span { flex: 1; font-size: 8.5px; color: var(--text-faint); text-align: center; }
+
+  .share-bar { height: 6px; background: var(--card-inset); border-radius: 3px; overflow: hidden; margin-top: 3px; }
+  .share-bar > i { display: block; height: 100%; background: var(--cyan); }
+  .muted-note { font-size: 11.5px; color: var(--text-muted); }
+</style>
+</head>
+<body>
+  <div id="shell"></div>
+  <div id="pageContent">
+    <div id="anGate" style="display:none" class="card">Halaman ini khusus admin / supervisor.</div>
+
+    <div id="anMain" style="display:none">
+      <div class="card">
+        <div class="an-toolbar">
+          <div>
+            <label for="anFrom">Dari tanggal usaha</label>
+            <input type="date" id="anFrom" class="field" style="margin:0" />
+          </div>
+          <div>
+            <label for="anTo">Sampai tanggal usaha</label>
+            <input type="date" id="anTo" class="field" style="margin:0" />
+          </div>
+          <button class="btn btn-primary" id="anShow">Terapkan</button>
+          <button class="btn btn-outline" id="an30">30 hari terakhir</button>
+          <span class="muted-note" id="anRange"></span>
+        </div>
+        <div id="anBody"><p class="muted-note">Memuat…</p></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script>
+    renderLayout({ active: 'analitik', title: 'Analitik', subtitle: 'Insight performa unit' });
+
+    const canView = ['admin', 'supervisor'].includes((getUser() || {}).role);
+    const DOW = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
+    const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0]; // tampilkan Sen..Min
+
+    function rp(n) { return 'Rp' + Math.round(Number(n) || 0).toLocaleString('id-ID'); }
+    function rpShort(n) {
+      n = Number(n) || 0;
+      if (n >= 1e9) return 'Rp' + (n / 1e9).toFixed(1) + 'M';
+      if (n >= 1e6) return 'Rp' + (n / 1e6).toFixed(1) + 'jt';
+      if (n >= 1e3) return 'Rp' + Math.round(n / 1e3) + 'rb';
+      return 'Rp' + n;
+    }
+    function num(n) { return Number(n || 0).toLocaleString('id-ID'); }
+    function escHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function pad2(n) { return String(n).padStart(2, '0'); }
+    function ymd(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+
+    function set30() {
+      const now = new Date();
+      document.getElementById('anFrom').value = ymd(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29));
+      document.getElementById('anTo').value = ymd(now);
+    }
+
+    function gate() {
+      document.getElementById('anMain').style.display = 'none';
+      document.getElementById('anGate').style.display = 'block';
+    }
+
+    function tbl(headers, rows) {
+      const th = headers.map((h) => `<th class="${h.num ? 'num' : ''}">${escHtml(h.t || h)}</th>`).join('');
+      const body = rows.length
+        ? rows.map((r) => '<tr>' + r.map((c) => `<td class="${c && c.num ? 'num' : ''}">${c && c.html != null ? c.html : escHtml(c && c.t != null ? c.t : c)}</td>`).join('') + '</tr>').join('')
+        : `<tr><td colspan="${headers.length}" class="muted-note">— tidak ada data —</td></tr>`;
+      return `<div style="overflow-x:auto"><table class="summary-table"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`;
+    }
+
+    function dailyChart(daily) {
+      if (!daily.length) return '<p class="muted-note">Tidak ada transaksi pada rentang ini.</p>';
+      const max = Math.max(...daily.map((d) => d.revenue), 1);
+      const bars = daily.map((d) => {
+        const h = Math.max(2, Math.round((d.revenue / max) * 100));
+        const we = (d.dow === 0 || d.dow === 5 || d.dow === 6);
+        const dd = d.date.slice(8, 10) + '/' + d.date.slice(5, 7);
+        return `<div class="bar-wrap" title="${escHtml(d.date)} (${DOW[d.dow]}) — ${rp(d.revenue)} · ${num(d.txn)} transaksi · ${num(d.guests)} tamu">
+          <div class="bar ${we ? 'weekend' : ''}" style="height:${h}%"></div>
+          <div class="bl">${dd}<br>${DOW[d.dow]}</div>
+        </div>`;
+      }).join('');
+      return `<div class="barchart">${bars}</div>
+        <div class="chart-note">Batang merah = akhir pekan (Jum–Min). Puncak ${rpShort(max)}. Arahkan kursor untuk detail.</div>`;
+    }
+
+    function heatmap(hm) {
+      const max = hm.max || 1;
+      const map = {};
+      hm.cells.forEach((c) => { map[c.dow + '-' + c.hour] = c; });
+      let html = '<div class="heat">';
+      html += '<div></div>';
+      for (let h = 0; h < 24; h++) html += `<div class="hh">${h % 3 === 0 ? pad2(h) : ''}</div>`;
+      for (const dw of DOW_ORDER) {
+        html += `<div class="rl">${DOW[dw]}</div>`;
+        for (let h = 0; h < 24; h++) {
+          const c = map[dw + '-' + h];
+          const t = c ? c.txn : 0;
+          const op = t ? (0.14 + 0.86 * (t / max)) : 0;
+          html += `<div class="cell ${t ? 'on' : ''}" style="opacity:${t ? op.toFixed(3) : 1}"${c ? ` title="${DOW[dw]} ${pad2(h)}:00 — ${num(t)} transaksi · ${rp(c.revenue)}"` : ''}></div>`;
+        }
+      }
+      html += '</div><div class="heat-legend"><span>sepi</span><span class="sw" style="opacity:.2"></span><span class="sw" style="opacity:.55"></span><span class="sw"></span><span>ramai (maks ' + num(max) + ' transaksi/jam)</span></div>';
+      return html;
+    }
+
+    function hourChart(hourly) {
+      const max = Math.max(...hourly.map((h) => h.txn), 1);
+      const bars = hourly.map((h) =>
+        `<div class="hb" style="height:${Math.max(2, Math.round((h.txn / max) * 100))}%" title="${pad2(h.hour)}:00 — ${num(h.txn)} transaksi · ${rp(h.revenue)}"></div>`).join('');
+      const xs = hourly.map((h) => `<span>${h.hour % 3 === 0 ? pad2(h.hour) : ''}</span>`).join('');
+      return `<div class="hourbars">${bars}</div><div class="hourbars-x">${xs}</div>`;
+    }
+
+    function render(r) {
+      document.getElementById('anRange').textContent =
+        `${r.range.from} s/d ${r.range.to} · ${r.unit.unit_name} · cutoff ${r.range.cutoff_hour}:00`;
+
+      const k = r.kpi;
+      const kpis = [
+        ['Pendapatan', rp(k.revenue), `${num(k.days)} hari usaha`],
+        ['Transaksi', num(k.txn), `${num(k.guests)} tamu`],
+        ['Rata-rata / transaksi', rp(k.avg_txn), `per tamu ${rp(k.guests ? k.revenue / k.guests : 0)}`],
+        ['Rata-rata / hari', rp(k.avg_day), `akhir pekan ${rpShort(k.weekend_avg_day)}`],
+        ['Item F&B terjual', num(k.items_sold), `${(k.items_sold / (k.txn || 1)).toFixed(1)} / transaksi`],
+        ['Sesi komplimen', num(k.comp_count), `nilai ${rpShort(k.comp_value)}`],
+      ].map(([kk, v, s]) => `<div class="an-kpi"><div class="k">${kk}</div><div class="v">${v}</div><div class="s">${s}</div></div>`).join('');
+
+      const insights = r.insights.length
+        ? `<div class="an-insights"><h4>💡 Insight otomatis</h4><ul>${r.insights.map((i) => `<li>${escHtml(i)}</li>`).join('')}</ul></div>`
+        : '';
+
+      const typeRows = r.by_room_type.map((x) => [
+        x.room_type,
+        { num: true, t: num(x.txn) },
+        { num: true, t: rp(x.revenue) },
+        { num: true, t: rp(x.avg) },
+        { html: `${Math.round(x.share * 100)}%<div class="share-bar"><i style="width:${Math.round(x.share * 100)}%"></i></div>` },
+      ]);
+      const roomRows = r.top_rooms.map((x, i) => [`${i + 1}. ${escHtml(x.room_name)}`, { num: true, t: num(x.txn) }, { num: true, t: rp(x.revenue) }]);
+      const fastRows = r.products_fast.map((p, i) => [`${i + 1}. ${escHtml(p.name)}`, escHtml(p.category), { num: true, t: num(p.qty) }, { num: true, t: rp(p.value) }]);
+      const slowRows = r.products_slow.map((p) => [escHtml(p.name), escHtml(p.category), { num: true, t: num(p.qty) }, { num: true, t: rp(p.value) }]);
+      const catRows = r.category_mix.map((c) => [escHtml(c.category), { num: true, t: num(c.qty) }, { num: true, t: rp(c.value) }]);
+      const payRows = r.payment_mix.map((p) => [p.method, { num: true, t: num(p.txn) }, { num: true, t: rp(p.amount) }]);
+
+      document.getElementById('anBody').innerHTML = `
+        <div class="an-kpis">${kpis}</div>
+        ${insights}
+        <div class="an-sec"><h4>Pendapatan per hari usaha</h4>${dailyChart(r.daily)}</div>
+        <div class="an-sec"><h4>Heatmap jam × hari (kepadatan transaksi)</h4>${heatmap(r.heatmap)}</div>
+        <div class="an-sec"><h4>Distribusi per jam</h4>${hourChart(r.hourly)}
+          <div class="chart-note">Berdasarkan jam mulai sesi (0–23).</div></div>
+        <div class="an-grid2">
+          <div class="an-sec"><h4>Per tipe kamar</h4>${tbl(['Tipe', { t: 'Transaksi', num: 1 }, { t: 'Pendapatan', num: 1 }, { t: 'Rata²', num: 1 }, 'Porsi'], typeRows)}</div>
+          <div class="an-sec"><h4>Kamar terproduktif</h4>${tbl(['Kamar', { t: 'Transaksi', num: 1 }, { t: 'Pendapatan', num: 1 }], roomRows)}</div>
+        </div>
+        <div class="an-sec"><h4>Produk fast-moving (Top 15)</h4>${tbl(['Produk', 'Kategori', { t: 'Qty', num: 1 }, { t: 'Nilai', num: 1 }], fastRows)}</div>
+        <div class="an-grid2">
+          <div class="an-sec"><h4>Produk paling lambat</h4>${tbl(['Produk', 'Kategori', { t: 'Qty', num: 1 }, { t: 'Nilai', num: 1 }], slowRows)}</div>
+          <div class="an-sec"><h4>Bauran kategori</h4>${tbl(['Kategori', { t: 'Qty', num: 1 }, { t: 'Nilai', num: 1 }], catRows)}</div>
+        </div>
+        <div class="an-sec"><h4>Bauran pembayaran</h4>${tbl(['Metode', { t: 'Transaksi', num: 1 }, { t: 'Nilai', num: 1 }], payRows)}</div>
+      `;
+    }
+
+    async function load() {
+      const body = document.getElementById('anBody');
+      body.innerHTML = '<p class="muted-note">Memuat…</p>';
+      try {
+        const r = await Api.getAnalyticsOverview({
+          from: document.getElementById('anFrom').value,
+          to: document.getElementById('anTo').value,
+        });
+        render(r);
+      } catch (err) {
+        if (err.status === 403) { gate(); return; }
+        body.innerHTML = `<p class="error-text" style="display:block">${escHtml(err.message)}</p>`;
+      }
+    }
+
+    if (!canView) {
+      gate();
+    } else {
+      document.getElementById('anMain').style.display = 'block';
+      set30();
+      document.getElementById('anShow').addEventListener('click', load);
+      document.getElementById('an30').addEventListener('click', () => { set30(); load(); });
+      load();
+    }
+  </script>
+</body>
+</html>

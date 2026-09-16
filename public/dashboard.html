@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Dashboard - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+<script src="/js/theme-boot.js"></script>
+</head>
+<body>
+  <div id="shell"></div>
+
+  <div id="pageContent">
+    <div id="orphanBanner" style="display:none;margin-bottom:14px;padding:10px 14px;border-radius:10px;
+      background:rgba(255,209,102,0.12);border:1px solid var(--yellow);color:var(--yellow);font-size:12.5px"></div>
+    <div class="stats-row">
+
+      <div>
+        <div class="total" id="totalRooms">-</div>
+        <div class="total-label">Total Rooms</div>
+      </div>
+      <div class="legend-chip"><span class="dot" style="background:var(--green)"></span>Available <b id="cntAvailable">0</b></div>
+      <div class="legend-chip"><span class="dot" style="background:var(--purple)"></span>Occupied <b id="cntOccupied">0</b></div>
+      <div class="legend-chip"><span class="dot" style="background:var(--yellow)"></span>Diproses Terminal Lain <b id="cntLocked">0</b></div>
+      <div class="legend-chip"><span class="dot" style="background:var(--gray)"></span>Maintenance <b id="cntMaintenance">0</b></div>
+      <div class="legend-chip"><span class="dot" style="background:var(--cyan)"></span>Sistem Lama <b id="cntLegacy">0</b></div>
+      <div class="legend-chip"><span class="dot" style="background:var(--yellow)"></span>10 Menit Terakhir <b id="cntEndingSoon">0</b></div>
+    </div>
+    <div class="room-grid" id="roomGrid"></div>
+  </div>
+
+  <div id="popupContainer"></div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script>
+    renderLayout({ active: 'dashboard', title: 'Room Monitor', subtitle: 'Status kamar real-time' });
+
+    // admin/supervisor bisa set/lepas maintenance lewat tombol 🔧 di kartu kamar.
+    const canManageRooms = ['admin', 'supervisor'].includes((getUser() || {}).role);
+
+    function classify(r) {
+      if (r.is_maintenance) return 'maintenance';
+      if (r.soft_lock) return 'locked';
+      if (r.active_trans) return 'occupied';
+      if (r.legacy_active) return 'legacy';
+      return 'available';
+    }
+
+    async function loadRooms() {
+      try {
+        const { rooms } = await Api.getRooms();
+        const counts = { available: 0, occupied: 0, locked: 0, maintenance: 0, legacy: 0 };
+        let endingSoonCount = 0;
+        const grid = document.getElementById('roomGrid');
+        grid.innerHTML = '';
+        for (const r of rooms) {
+          const cls = classify(r);
+          counts[cls]++;
+          const card = document.createElement('div');
+          card.className = `room-card status-${cls}`;
+          const wrench = (canManageRooms && (cls === 'available' || cls === 'maintenance'))
+            ? `<button class="mnt-btn" title="Atur maintenance" style="background:none;border:none;cursor:pointer;font-size:13px;line-height:1;padding:2px 4px;color:var(--text-faint)">🔧</button>`
+            : '';
+          let body = `
+            <div class="top-row">
+              <div>
+                <div class="room-code">${r.room_name}</div>
+                <div class="room-type">${r.room_type}</div>
+              </div>
+              <div style="display:flex;align-items:center;gap:2px">
+                ${wrench}
+                <div class="status-dot status-${cls}"></div>
+              </div>
+            </div>`;
+          if (cls === 'occupied') {
+            const at = r.active_trans;
+            if (at.is_test) {
+              body += `<div class="lock-note" style="color:var(--yellow);font-weight:600">🧪 TES ROOM — player nyala, cek lagu/mic</div>`;
+            } else if (at.rate_mode === 'comp') {
+              body += `<div class="lock-note" style="font-weight:600">👑 VIP/VVIP — tanpa minimum F&B</div>`;
+            }
+            const cd = at.expires_at ? formatCountdown(at.expires_at) : { text: formatDuration(at.start_time), overtime: false };
+            body += `<div class="timer${cd.overtime ? ' overtime' : ''}" data-expires="${at.expires_at || ''}">${cd.text}</div>`;
+            if (at.is_test) body += `<div class="guests" style="color:var(--yellow)">player auto-mati</div>`;
+            body += `<div class="guests">${icon('users', 13)} ${at.person || 0} tamu · ${at.cust_name}</div>`;
+            // Peringatan visual menjelang waktu habis. Kamar biasa: 10 menit
+            // terakhir (kasir pastikan bill LUNAS, security cek ruangan).
+            // Mode Test: 3 menit terakhir (player mau auto-mati).
+            if (at.expires_at) {
+              const endingMin = at.is_test ? TEST_ENDING_SOON_MIN : ENDING_SOON_MIN;
+              card.dataset.expires = at.expires_at;
+              card.dataset.endingMin = endingMin;
+              const phase = timePhase(at.expires_at, endingMin);
+              if (phase) { card.classList.add(phase); endingSoonCount++; }
+              if (phase === 'ending-soon') {
+                body += at.is_test
+                  ? `<div class="lock-note ending-note">🧪 Tes hampir selesai — player mati sebentar lagi</div>`
+                  : `<div class="lock-note ending-note">⏱ 10 menit terakhir — pastikan semua bill LUNAS &amp; cek kondisi ruangan</div>`;
+              } else if (phase === 'time-over') {
+                body += at.is_test
+                  ? `<div class="lock-note ending-note">⏰ Waktu tes habis — player dimatikan</div>`
+                  : `<div class="lock-note ending-note">⏰ Waktu habis — checkout / perpanjangan</div>`;
+              }
+            }
+            body += `<button class="cta">${at.is_test ? 'Kelola Tes' : 'Kelola Order'}</button>`;
+            // Notifikasi sekali saat waktu sebuah kamar habis.
+            if (!at.is_test && at.expires_at && new Date(at.expires_at) <= new Date() && !timeUpShown.has(at.trans_id)) {
+              timeUpShown.add(at.trans_id);
+              showTimeUpPopup(r.room_name);
+            }
+          } else if (cls === 'locked') {
+            body += `<div class="lock-note">Diproses oleh ${r.soft_lock.locked_by}<br/>(${r.soft_lock.terminal_id})</div>`;
+            body += `<button class="cta">Sedang Diproses</button>`;
+          } else if (cls === 'maintenance') {
+            body += `<div class="lock-note">${r.maintenance_reason || 'Maintenance'}</div>`;
+            body += `<button class="cta">${canManageRooms ? 'Kelola / Selesai' : 'Maintenance'}</button>`;
+          } else if (cls === 'legacy') {
+            body += `<div class="lock-note">Terpakai — sistem lama (154)</div>`;
+            body += `<button class="cta">Dikelola Sistem Lama</button>`;
+          } else {
+            body += `<button class="cta">Book Room</button>`;
+          }
+          card.innerHTML = body;
+          card.addEventListener('click', () => onRoomClick(r, cls));
+          const mb = card.querySelector('.mnt-btn');
+          if (mb) mb.addEventListener('click', (e) => { e.stopPropagation(); openMaintenanceModal(r, cls); });
+          grid.appendChild(card);
+        }
+        document.getElementById('totalRooms').textContent = rooms.length;
+        document.getElementById('cntAvailable').textContent = counts.available;
+        document.getElementById('cntOccupied').textContent = counts.occupied;
+        document.getElementById('cntLocked').textContent = counts.locked;
+        document.getElementById('cntMaintenance').textContent = counts.maintenance;
+        document.getElementById('cntLegacy').textContent = counts.legacy;
+        document.getElementById('cntEndingSoon').textContent = endingSoonCount;
+      } catch (err) {
+        showToast(err.message, 'error');
+      }
+    }
+
+    function onRoomClick(room, cls) {
+      if (cls === 'maintenance') {
+        if (canManageRooms) openMaintenanceModal(room, cls);
+        return;
+      }
+      if (cls === 'locked' || cls === 'legacy') return;
+      if (cls === 'occupied') {
+        window.location.href = `/room-detail.html?id=${room.active_trans.trans_id}`;
+      } else {
+        window.location.href = `/orders.html?room_id=${room.room_id}`;
+      }
+    }
+
+    // Modal set / lepas maintenance (admin/supervisor).
+    function openMaintenanceModal(room, cls) {
+      const isMnt = cls === 'maintenance';
+      const wrap = document.createElement('div');
+      wrap.className = 'popup-overlay';
+      wrap.innerHTML = `<div class="popup-box" style="text-align:left;max-width:360px">
+        <h2 style="color:var(--text)">🔧 ${room.room_name}</h2>
+        ${isMnt
+          ? `<p style="font-size:12.5px">Kamar sedang <b>maintenance</b>${room.maintenance_reason ? ` — "${room.maintenance_reason}"` : ''}.</p>`
+          : `<p style="font-size:12.5px">Tandai <b>${room.room_name}</b> sebagai <b>under maintenance</b>? Kamar tidak bisa dibuka sampai maintenance dilepas.</p>
+             <label class="field-label">Alasan / keterangan</label>
+             <input class="field" id="mntReason" placeholder="mis. AC rusak, mic mati, renovasi" />`}
+        <div id="mntErr" class="error-text" style="display:none"></div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          ${isMnt
+            ? `<button class="btn btn-primary" id="mntClear" style="flex:1">Selesai — Kembalikan Kamar</button>`
+            : `<button class="btn btn-danger" id="mntSet" style="flex:1">Set Maintenance</button>`}
+          <button class="btn btn-outline" id="mntCancel" style="flex:1">Batal</button>
+        </div>
+      </div>`;
+      const close = () => wrap.remove();
+      wrap.addEventListener('click', (e) => { if (e.target === wrap) close(); });
+      wrap.querySelector('#mntCancel').addEventListener('click', close);
+      const errEl = wrap.querySelector('#mntErr');
+      const setBtn = wrap.querySelector('#mntSet');
+      const clrBtn = wrap.querySelector('#mntClear');
+      if (setBtn) setBtn.addEventListener('click', async () => {
+        setBtn.disabled = true; errEl.style.display = 'none';
+        try {
+          await Api.setMaintenance(room.room_id, wrap.querySelector('#mntReason').value.trim());
+          showToast(`${room.room_name} ditandai maintenance.`);
+          close(); loadRooms();
+        } catch (e) { errEl.textContent = e.message; errEl.style.display = 'block'; setBtn.disabled = false; }
+      });
+      if (clrBtn) clrBtn.addEventListener('click', async () => {
+        clrBtn.disabled = true; errEl.style.display = 'none';
+        try {
+          await Api.clearMaintenance(room.room_id);
+          showToast(`${room.room_name} kembali tersedia.`);
+          close(); loadRooms();
+        } catch (e) { errEl.textContent = e.message; errEl.style.display = 'block'; clrBtn.disabled = false; }
+      });
+      document.getElementById('popupContainer').appendChild(wrap);
+    }
+
+    // Notifikasi "waktu habis" - satu kali per transaksi.
+    const timeUpShown = new Set();
+    function showTimeUpPopup(roomName) {
+      const wrap = document.createElement('div');
+      wrap.className = 'popup-overlay';
+      wrap.innerHTML = `<div class="popup-box"><h2 style="color:var(--red)">⏰ Waktu Habis</h2>
+        <p>Waktu karaoke <b>${roomName}</b> sudah habis. Konfirmasi ke tamu / proses perpanjangan atau checkout.</p>
+        <button class="btn btn-primary">OK</button></div>`;
+      wrap.querySelector('button').addEventListener('click', () => wrap.remove());
+      document.getElementById('popupContainer').appendChild(wrap);
+    }
+
+    // Fase waktu kamar untuk penandaan visual:
+    //   null         -> masih di atas ambang
+    //   'ending-soon' -> <= ambang (kuning, berkedip)
+    //   'time-over'   -> waktu sudah lewat (merah)
+    // Kamar biasa: ambang 10 menit. Mode Test (durasi cuma 15 mnt): ambang
+    // 3 menit, biar tidak kuning nyaris sepanjang tes.
+    const ENDING_SOON_MIN = 10;
+    const TEST_ENDING_SOON_MIN = 3;
+    function timePhase(expiresIso, endingMin = ENDING_SOON_MIN) {
+      const diffMin = (new Date(expiresIso).getTime() - Date.now()) / 60000;
+      if (diffMin <= 0) return 'time-over';
+      if (diffMin <= endingMin) return 'ending-soon';
+      return null;
+    }
+
+    // Tick hitung mundur tiap detik tanpa fetch ulang (loadRooms hanya tiap 4s).
+    function tickTimers() {
+      document.querySelectorAll('#roomGrid .timer[data-expires]').forEach((el) => {
+        if (!el.dataset.expires) return;
+        const { text, overtime } = formatCountdown(el.dataset.expires);
+        el.textContent = text;
+        el.classList.toggle('overtime', overtime);
+      });
+      // Kartu: perbarui penandaan fase (10 menit terakhir / lewat) tiap detik
+      // supaya transisinya tidak menunggu refresh 4 detik.
+      document.querySelectorAll('#roomGrid .room-card[data-expires]').forEach((card) => {
+        if (!card.dataset.expires) return;
+        const phase = timePhase(card.dataset.expires, Number(card.dataset.endingMin) || ENDING_SOON_MIN);
+        card.classList.toggle('ending-soon', phase === 'ending-soon');
+        card.classList.toggle('time-over', phase === 'time-over');
+      });
+    }
+
+    loadRooms();
+    setInterval(loadRooms, 4000);
+    setInterval(tickTimers, 1000);
+
+    // --- Notifikasi Pesanan Siap (pop-up) ---
+    const shownNotifIds = new Set();
+    async function pollPesananSiap() {
+      try {
+        const { notifications } = await Api.getPesananSiapNotif();
+        for (const n of notifications) {
+          if (shownNotifIds.has(n.id)) continue;
+          shownNotifIds.add(n.id);
+          const wrap = document.createElement('div');
+          wrap.className = 'popup-overlay';
+          wrap.innerHTML = `<div class="popup-box"><h2>🔔 Pesanan Siap!</h2><p>${n.message}</p>
+            <button class="btn btn-primary" id="ackBtn-${n.id}">OK, sudah dilihat</button></div>`;
+          document.getElementById('popupContainer').appendChild(wrap);
+          document.getElementById(`ackBtn-${n.id}`).addEventListener('click', async () => {
+            wrap.remove();
+            try { await Api.ackPesananSiap(n.id); } catch (e) { console.error(e); }
+          });
+        }
+      } catch (err) { console.error(err); }
+    }
+    setInterval(pollPesananSiap, 3000);
+    pollPesananSiap();
+
+    // --- Panel room "orphan": aktif di server lama (154) tapi gr-pos tak
+    // punya transaksinya. Biasanya = ditangani aplikasi lama saat operasi
+    // paralel / Plan B (gr-pos sempat mati). Perlu rekonsiliasi manual. ---
+    async function pollOrphans() {
+      const role = (getUser() || {}).role;
+      if (!['admin', 'supervisor'].includes(role)) return;
+      try {
+        const { orphans, last_poll } = await Api.getLegacyRooms();
+        const el = document.getElementById('orphanBanner');
+        if (orphans && orphans.length) {
+          const ids = orphans.map((o) => o.room_id).join(', ');
+          el.textContent = `⚠️ Room aktif di sistem lama tapi tidak tercatat di gr-pos: ${ids}. ` +
+            `Kemungkinan ditangani aplikasi lama — rekonsiliasi transaksinya secara manual.`;
+          el.style.display = 'block';
+        } else if (last_poll && last_poll.error) {
+          el.textContent = `ℹ️ Tidak bisa membaca status room dari server lama (154): ${last_poll.error}`;
+          el.style.display = 'block';
+        } else {
+          el.style.display = 'none';
+        }
+      } catch (err) { console.error(err); }
+    }
+    setInterval(pollOrphans, 20000);
+    pollOrphans();
+  </script>
+</body>
+</html>

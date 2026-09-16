@@ -1,0 +1,443 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Laporan - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+<script src="/js/theme-boot.js"></script>
+<style>
+  .rep-toolbar { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 16px; }
+  .rep-toolbar label { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+  .rep-toolbar input[type="date"] { padding: 7px 9px; }
+  .rep-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 18px; }
+  .rep-card { background: var(--card, #fff); border: 1px solid var(--border, #e5e5e5); border-radius: 10px; padding: 12px 14px; }
+  .rep-card .k { font-size: 11px; color: var(--text-muted); }
+  .rep-card .v { font-size: 18px; font-weight: 700; margin-top: 3px; }
+  .rep-card .v.warn { color: var(--red); }
+  .rep-sec h4 { margin: 18px 0 6px; font-size: 13px; }
+  .rep-warn { font-size: 12.5px; margin: 10px 0 4px; }
+  .rep-warn .bad { color: var(--red); font-weight: 700; }
+  #repWrap table { margin-bottom: 6px; }
+  .rep-actions { display: flex; gap: 8px; flex-wrap: wrap; margin: 6px 0 20px; }
+  .muted-note { font-size: 11.5px; color: var(--text-muted); }
+  /* Segmented toggle: Ringkas Keuangan <-> Lengkap */
+  .rep-viewtoggle { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+  .rep-viewtoggle button {
+    background: var(--card-inset); color: var(--text-muted); border: none; cursor: pointer;
+    padding: 7px 14px; font-size: 12px; font-weight: 700;
+  }
+  .rep-viewtoggle button + button { border-left: 1px solid var(--border); }
+  .rep-viewtoggle button.active { background: var(--cyan-dim); color: var(--cyan); }
+  .rep-fin-table td.pay { text-transform: capitalize; }
+  .rep-fin-table tr.total-row td { font-weight: 800; border-top: 2px solid var(--border); }
+</style>
+</head>
+<body>
+  <div id="shell"></div>
+  <div id="pageContent">
+    <div id="repGate" style="display:none" class="card">Halaman ini khusus admin / supervisor.</div>
+
+    <div id="repMain" style="display:none">
+      <div class="card">
+        <div class="rep-toolbar">
+          <div>
+            <label for="repDate">Tanggal usaha</label>
+            <input type="date" id="repDate" class="field" />
+          </div>
+          <button class="btn btn-primary" id="btnShow">Tampilkan</button>
+          <div class="rep-viewtoggle" id="repViewToggle" style="margin-left:4px">
+            <button data-view="simple">Ringkas Keuangan</button>
+            <button data-view="full">Lengkap</button>
+          </div>
+          <span class="muted-note" id="repRange"></span>
+        </div>
+
+        <div id="repWrap"><p class="muted-note">Pilih tanggal lalu tekan Tampilkan.</p></div>
+
+        <div class="rep-actions" id="repActions" style="display:none">
+          <button class="btn btn-outline" id="btnCsv">Unduh CSV</button>
+          <button class="btn btn-primary" id="btnClose">Tutup Hari &amp; Kirim Email</button>
+        </div>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <h3 style="margin:0 0 8px">Riwayat Tutup Hari</h3>
+        <div id="repHistory" style="overflow-x:auto"><p class="muted-note">Memuat…</p></div>
+      </div>
+    </div>
+
+    <div id="modalMount"></div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script>
+    renderLayout({ active: 'reports', title: 'Laporan', subtitle: 'Tutup Hari' });
+
+    const canClose = ['admin', 'supervisor'].includes((getUser() || {}).role);
+    const modalMount = document.getElementById('modalMount');
+    function closeModal() { modalMount.innerHTML = ''; }
+    modalMount.addEventListener('click', (e) => { if (e.target === modalMount.firstElementChild) closeModal(); });
+
+    let lastReport = null;
+    let lastMeta = null; // { recipients, cc, smtp_configured }
+    let historyDates = new Set();
+
+    function rp(n) { return 'Rp' + Number(n || 0).toLocaleString('id-ID'); }
+    function escHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function tbl(headers, rows) {
+      const th = headers.map((h, i) => `<th class="${i ? 'num' : ''}">${h}</th>`).join('');
+      const body = rows.length
+        ? rows.map((r) => '<tr>' + r.map((c, i) => `<td class="${i ? 'num' : ''}">${c}</td>`).join('') + '</tr>').join('')
+        : `<tr><td colspan="${headers.length}" class="muted-note">— tidak ada data —</td></tr>`;
+      return `<div style="overflow-x:auto"><table class="summary-table"><thead><tr>${th}</tr></thead><tbody>${body}</tbody></table></div>`;
+    }
+
+    function localDateStr(d) {
+      return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+    }
+    function todayBusinessDate() {
+      // Fallback saja - nilai sebenarnya diisi dari report.business_date server.
+      const cutoff = (lastReport && lastReport.eod_cutoff_hour) || 5;
+      const d = new Date();
+      if (d.getHours() < cutoff) d.setDate(d.getDate() - 1);
+      return localDateStr(d);
+    }
+
+    // Pilihan tampilan: 'simple' (Ringkas Keuangan - default, untuk finance)
+    // atau 'full' (rincian lengkap). Disimpan per-browser.
+    let repView = localStorage.getItem('grpos-reports-view') === 'full' ? 'full' : 'simple';
+    function hm(s) { return s ? String(s).slice(11, 16) : '—'; }
+
+    function renderReport(r) {
+      lastReport = r;
+      // Sinkronkan date-picker dengan tanggal usaha yang benar-benar dihitung server.
+      if (r.business_date && document.getElementById('repDate').value !== r.business_date) {
+        document.getElementById('repDate').value = r.business_date;
+      }
+      document.getElementById('repRange').textContent = `${r.range_start} s/d ${r.range_end} WIB · cutoff ${r.eod_cutoff_hour}:00`;
+      syncViewToggle();
+      if (repView === 'simple') renderSimple(r); else renderFull(r);
+      document.getElementById('repActions').style.display = canClose ? 'flex' : 'none';
+    }
+
+    function syncViewToggle() {
+      document.querySelectorAll('#repViewToggle button').forEach((b) => {
+        b.classList.toggle('active', b.dataset.view === repView);
+      });
+      const csvBtn = document.getElementById('btnCsv');
+      if (csvBtn) csvBtn.textContent = repView === 'simple' ? 'Unduh CSV (ringkas)' : 'Unduh CSV (lengkap)';
+    }
+
+    // --- Ringkas Keuangan: daftar transaksi + total pokok saja ---
+    function renderSimple(r) {
+      const s = r.summary;
+      const mix = Object.fromEntries(r.payment_mix.map((p) => [p.method, p]));
+      const nonTunai = (mix.qris?.amount || 0) + (mix.kartu?.amount || 0) + (mix.lainnya?.amount || 0);
+
+      const cards = [
+        ['Pendapatan (di luar pajak)', rp(s.net_revenue), false],
+        ['Transaksi', Number(s.closed_count).toLocaleString('id-ID'), false],
+        ['Tunai', rp(mix.tunai?.amount || 0), false],
+        ['Non-tunai (QRIS + Kartu)', rp(nonTunai), false],
+      ];
+      if (Number(s.resto_tax_total || 0)) cards.push(['Pajak Restoran terutang', rp(s.resto_tax_total), false]);
+      if (s.collected_vs_grand_gap !== 0) cards.push(['Selisih terkumpul', rp(s.collected_vs_grand_gap), true]);
+      const cardsHtml = cards.map(([k, v, warn]) =>
+        `<div class="rep-card"><div class="k">${k}</div><div class="v ${warn ? 'warn' : ''}">${v}</div></div>`).join('');
+
+      const rows = (r.transactions || []).map((t, i) => {
+        const metode = escHtml(t.final_payment_method || t.initial_payment_method || '—');
+        return `<tr>
+          <td>${i + 1}</td>
+          <td class="num">${hm(t.start_time)}–${hm(t.end_time)}</td>
+          <td>${escHtml(t.room_name || ('Room ' + t.room_id))}</td>
+          <td>${escHtml(t.room_type_snapshot || '')}</td>
+          <td>${escHtml(t.cust_name || '')}</td>
+          <td class="num">${Number(t.person || 0)}</td>
+          <td class="num">${rp(t.grand_total)}</td>
+          <td class="num pay">${metode}</td>
+          <td>${escHtml(t.closed_by_name || t.opened_by_name || '')}</td>
+        </tr>`;
+      }).join('');
+      const totalRow = `<tr class="total-row">
+        <td colspan="6">TOTAL — ${Number(s.closed_count).toLocaleString('id-ID')} transaksi</td>
+        <td class="num">${rp(s.gross_billed_total != null ? s.gross_billed_total : s.net_revenue)}</td><td></td><td></td></tr>`;
+
+      const table = (r.transactions || []).length
+        ? `<div style="overflow-x:auto"><table class="summary-table rep-fin-table">
+             <thead><tr><th>No</th><th class="num">Jam</th><th>Room</th><th>Tipe</th><th>Tamu</th>
+             <th class="num">Pax</th><th class="num">Total</th><th class="num">Bayar</th><th>Kasir</th></tr></thead>
+             <tbody>${rows}${totalRow}</tbody></table></div>`
+        : `<p class="muted-note">— tidak ada transaksi selesai pada tanggal ini —</p>`;
+
+      const notes = [];
+      if (r.active_open_count) notes.push(`<span class="bad">Kamar masih aktif: ${Number(r.active_open_count).toLocaleString('id-ID')}</span> (transaksi belum final)`);
+      if (r.voids.count) notes.push(`Void: ${Number(r.voids.count).toLocaleString('id-ID')} item · ${rp(r.voids.total)}`);
+      if (r.cancelled_count) notes.push(`Dibatalkan: ${Number(r.cancelled_count).toLocaleString('id-ID')}`);
+      if (Number(s.comp_value_total || 0)) notes.push(`Komplimen VIP/VVIP: ${Number(s.comp_count)} sesi (nilai ${rp(s.comp_value_total)})`);
+
+      document.getElementById('repWrap').innerHTML =
+        `<div class="rep-cards">${cardsHtml}</div>
+         ${notes.length ? `<div class="rep-warn">${notes.join(' &nbsp;·&nbsp; ')}</div>` : ''}
+         <div class="rep-sec"><h4>Daftar transaksi</h4>${table}</div>
+         <p class="muted-note">Pendapatan = DPP F&amp;B bersih + Service Charge (Pajak Restoran = titipan ke Pemda, tidak dihitung sebagai pendapatan). Transaksi model lama tetap SC-inklusif. Rincian kolom penuh ada di tampilan "Lengkap" / CSV lengkap.</p>`;
+    }
+
+    // --- Lengkap: rincian penuh (per kasir, per tipe kamar, produk) ---
+    function renderFull(r) {
+      const s = r.summary;
+      const cards = [
+        ['Pendapatan (di luar pajak)', rp(s.net_revenue), false],
+        ['Transaksi', Number(s.closed_count).toLocaleString('id-ID'), false],
+        ['F&B bruto', rp(s.fnb_gross), false],
+        ['Service charge', rp(s.service_charge_total), false],
+        ['Pajak Restoran terutang', rp(s.resto_tax_total || 0), false],
+        ['Total tagihan (incl. pajak)', rp(s.gross_billed_total != null ? s.gross_billed_total : s.net_revenue), false],
+        ['Diskon', '-' + rp(s.disc_total), false],
+        ['Terkumpul', rp(s.collected_total), false],
+        ['Selisih terkumpul', rp(s.collected_vs_grand_gap), s.collected_vs_grand_gap !== 0],
+        ['Komplimen VIP/VVIP', `${Number(s.comp_count || 0)} sesi · ${Number(s.comp_hours_total || 0)} jam`, false],
+        ['Nilai komplimen', rp(s.comp_value_total || 0), false],
+      ].map(([k, v, warn]) => `<div class="rep-card"><div class="k">${k}</div><div class="v ${warn ? 'warn' : ''}">${v}</div></div>`).join('');
+
+      const pay = tbl(['Metode', 'Transaksi', 'Nilai'],
+        r.payment_mix.map((p) => [escHtml(p.method), Number(p.txn_count).toLocaleString('id-ID'), rp(p.amount)]));
+
+      const cashier = tbl(['Kasir', 'Transaksi', 'Pendapatan (di luar pajak)', 'Tunai', 'QRIS', 'Kartu', 'Lainnya'],
+        r.by_cashier.map((c) => [escHtml(c.cashier), Number(c.count).toLocaleString('id-ID'), rp(c.grand_total - (c.resto_tax || 0)),
+          rp(c.methods.tunai), rp(c.methods.qris), rp(c.methods.kartu), rp(c.methods.lainnya)]));
+
+      const roomType = tbl(['Tipe kamar', 'Transaksi', 'F&B bruto', 'Service charge', 'Pajak Restoran', 'Pendapatan (di luar pajak)'],
+        r.by_room_type.map((x) => [escHtml(x.room_type), Number(x.count).toLocaleString('id-ID'),
+          rp(x.fnb_gross), rp(x.service_charge), rp(x.resto_tax || 0), rp(x.grand_total - (x.resto_tax || 0))]));
+
+      const top = tbl(['Produk', 'Qty', 'Nilai'],
+        r.top_products.map((p) => [escHtml(p.name), Number(p.qty).toLocaleString('id-ID'), rp(p.value)]));
+
+      const voidByKasir = (r.voids && r.voids.by_kasir) || [];
+      const voidSec = voidByKasir.length
+        ? tbl(['Kasir (pembuka sesi)', 'Jml void', 'Qty', 'Nilai'],
+            voidByKasir.map((x) => [escHtml(x.kasir_name), Number(x.void_count).toLocaleString('id-ID'),
+              Number(x.void_qty).toLocaleString('id-ID'), rp(x.void_value)]))
+        : '<p class="muted-note">Tidak ada void pada tanggal ini.</p>';
+
+      const shifts = r.by_shift || [];
+      const shiftSec = shifts.length
+        ? tbl(['Kasir', 'Terminal', 'Buka', 'Tutup', 'Modal', 'Kas seharusnya', 'Kas dihitung', 'Selisih'],
+            shifts.map((x) => [escHtml(x.cashier_name), escHtml(x.terminal_id || '-'),
+              escHtml(String(x.opened_at || '').slice(11)), escHtml(String(x.closed_at || '').slice(11)),
+              rp(x.opening_float), rp(x.expected_cash || 0), rp(x.counted_cash || 0),
+              (Number(x.variance) > 0 ? '+' : '') + rp(x.variance || 0)]))
+        : '<p class="muted-note">Tidak ada shift kasir yang ditutup pada tanggal ini.</p>';
+
+      const warn = `
+        <div class="rep-warn">
+          Void: ${Number(r.voids.count).toLocaleString('id-ID')} item · ${rp(r.voids.total)} &nbsp;·&nbsp;
+          Dibatalkan: ${Number(r.cancelled_count).toLocaleString('id-ID')} &nbsp;·&nbsp;
+          <span class="${r.active_open_count ? 'bad' : ''}">Kamar masih aktif: ${Number(r.active_open_count).toLocaleString('id-ID')}${
+            r.active_open_oldest_start ? ` (terlama sejak ${escHtml(r.active_open_oldest_start)})` : ''}</span>
+        </div>
+        ${r.data_quality ? `<div class="rep-warn bad">Catatan data: ${r.data_quality.unknown_settlement_method_txns} transaksi punya pelunasan tanpa metode bayar tercatat.</div>` : ''}`;
+
+      document.getElementById('repWrap').innerHTML =
+        `<div class="rep-cards">${cards}</div>${warn}
+         <div class="rep-sec"><h4>Rincian penerimaan per metode</h4>${pay}</div>
+         <div class="rep-sec"><h4>Per kasir</h4>${cashier}</div>
+         <div class="rep-sec"><h4>Per tipe kamar</h4>${roomType}</div>
+         <div class="rep-sec"><h4>Produk terlaris</h4>${top}</div>
+         <div class="rep-sec"><h4>Tutup Kasir / Shift</h4>
+           <p class="muted-note" style="margin:0 0 8px">Kolom "Modal" &amp; "Kas seharusnya" = rekonsiliasi kas fisik di laci, BUKAN bagian omset - omset sudah lengkap di "Pendapatan usaha" &amp; "Total terkumpul" di atas.</p>
+           ${shiftSec}</div>
+         <div class="rep-sec"><h4>Void per kasir</h4>${voidSec}</div>`;
+    }
+
+    async function show() {
+      const date = document.getElementById('repDate').value;
+      if (!date) { showToast('Pilih tanggal dulu.', 'error'); return; }
+      const btn = document.getElementById('btnShow');
+      btn.disabled = true;
+      try {
+        const resp = await Api.getDailyReport(date);
+        lastMeta = { recipients: resp.recipients, cc: resp.cc, smtp_configured: resp.smtp_configured };
+        renderReport(resp.report);
+      } catch (err) {
+        if (err.status === 403) { gate(); return; }
+        showToast('Gagal memuat laporan: ' + err.message, 'error');
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function gate() {
+      document.getElementById('repMain').style.display = 'none';
+      document.getElementById('repGate').style.display = 'block';
+    }
+
+    // --- Modal Tutup Hari ---
+    function openCloseModal() {
+      const date = document.getElementById('repDate').value;
+      const r = lastReport;
+      const recips = (lastMeta && lastMeta.recipients) || [];
+      const smtpOk = lastMeta && lastMeta.smtp_configured;
+      const already = historyDates.has(date);
+      const activeWarn = r && r.active_open_count > 0;
+
+      modalMount.innerHTML = `
+        <div class="modal-overlay">
+          <div class="modal-box card">
+            <h3>Tutup Hari — ${escHtml(date)}</h3>
+            <p class="muted">Pendapatan ${rp(r ? r.summary.net_revenue : 0)} · ${r ? r.summary.closed_count : 0} transaksi.</p>
+            ${smtpOk
+              ? `<p style="font-size:12px">Email dikirim ke: <b>${recips.map(escHtml).join(', ') || '(kosong)'}</b></p>`
+              : `<p class="error-text" style="display:block">SMTP / penerima belum dikonfigurasi di .env — laporan tetap disimpan tapi <b>tidak</b> terkirim.</p>`}
+            ${activeWarn ? `<p class="error-text" style="display:block">${r.active_open_count} kamar masih aktif — sebaiknya tutup dulu semua kamar.</p>` : ''}
+            ${already ? `<p class="error-text" style="display:block">Tanggal ini sudah pernah ditutup — aksi ini membuat versi baru &amp; mengirim ulang.</p>` : ''}
+            <div id="closeErr" class="error-text" style="display:none"></div>
+            <button class="btn btn-primary btn-block" id="closeSubmit">${smtpOk ? 'Simpan &amp; Kirim Email' : 'Simpan (tanpa email)'}</button>
+            <button class="btn btn-outline btn-block" id="closeCancel" style="margin-top:8px">Batal</button>
+          </div>
+        </div>`;
+      document.getElementById('closeCancel').addEventListener('click', closeModal);
+      document.getElementById('closeSubmit').addEventListener('click', async () => {
+        const b = document.getElementById('closeSubmit');
+        const errEl = document.getElementById('closeErr');
+        errEl.style.display = 'none';
+        b.disabled = true;
+        try {
+          const res = await Api.closeDaily(date, !!smtpOk);
+          closeModal();
+          if (res.emailed) showToast('Tutup Hari tersimpan & email terkirim.');
+          else if (res.email_error) showToast('Tersimpan, tapi email GAGAL: ' + res.email_error, 'error');
+          else showToast('Tutup Hari tersimpan (versi ' + (res.daily_close ? res.daily_close.version : '?') + ').');
+          renderReport(res.report);
+          await loadHistory();
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.style.display = 'block';
+          b.disabled = false;
+        }
+      });
+    }
+
+    // --- Riwayat ---
+    async function loadHistory() {
+      try {
+        const { history } = await Api.getDailyHistory(60);
+        historyDates = new Set(history.map((h) => String(h.business_date).slice(0, 10)));
+        const el = document.getElementById('repHistory');
+        if (!history.length) { el.innerHTML = '<p class="muted-note">Belum ada Tutup Hari tersimpan.</p>'; return; }
+        el.innerHTML = `<table class="summary-table">
+          <thead><tr><th>Tanggal</th><th class="num">Versi</th><th>Dibuat</th><th class="num">Baris CSV</th><th>Email</th><th></th></tr></thead>
+          <tbody>${history.map((h) => {
+            const bd = String(h.business_date).slice(0, 10);
+            const emailCell = h.email_error
+              ? `<span style="color:var(--red)">gagal: ${escHtml(h.email_error).slice(0, 60)}</span>`
+              : (h.emailed_at ? escHtml(String(h.emailed_at)) : '—');
+            return `<tr>
+              <td>${escHtml(bd)}</td>
+              <td class="num">${h.version}</td>
+              <td>${escHtml(String(h.generated_at))}${h.generated_by_name ? ' · ' + escHtml(h.generated_by_name) : ''}</td>
+              <td class="num">${h.csv_row_count}</td>
+              <td>${emailCell}</td>
+              <td>
+                <button class="btn btn-outline" data-act="view" data-bd="${bd}" style="padding:4px 9px;font-size:11px">Lihat</button>
+                <button class="btn btn-outline" data-act="csv" data-bd="${bd}" style="padding:4px 9px;font-size:11px">CSV</button>
+                ${canClose ? `<button class="btn btn-outline" data-act="resend" data-bd="${bd}" style="padding:4px 9px;font-size:11px">Kirim Ulang</button>` : ''}
+              </td>
+            </tr>`;
+          }).join('')}</tbody></table>`;
+        el.querySelectorAll('button[data-act]').forEach((b) => {
+          b.addEventListener('click', () => histAction(b.dataset.act, b.dataset.bd, b));
+        });
+      } catch (err) {
+        if (err.status === 403) { gate(); return; }
+        document.getElementById('repHistory').innerHTML = `<p class="error-text" style="display:block">${escHtml(err.message)}</p>`;
+      }
+    }
+
+    async function histAction(act, bd, btn) {
+      try {
+        if (act === 'view') {
+          const { report } = await Api.getStoredDailyClose(bd);
+          document.getElementById('repDate').value = bd;
+          renderReport(report);
+          document.getElementById('repActions').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        } else if (act === 'csv') {
+          await Api.downloadDailyCsv(bd, true);
+        } else if (act === 'resend') {
+          btn.disabled = true;
+          const res = await Api.resendDailyClose(bd);
+          if (res.emailed) showToast('Email terkirim ulang.');
+          else showToast('Kirim ulang GAGAL: ' + (res.email_error || 'tidak diketahui'), 'error');
+          await loadHistory();
+        }
+      } catch (err) {
+        showToast(err.message, 'error');
+        if (btn) btn.disabled = false;
+      }
+    }
+
+    // --- CSV ringkas (dibuat di sisi klien dari daftar transaksi) ---
+    const SIMPLE_CSV_COLS = ['no', 'tanggal', 'jam_masuk', 'jam_keluar', 'room', 'tipe_kamar',
+      'tamu', 'pax', 'total', 'metode_bayar', 'kasir'];
+    function csvCell(v) { return '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"'; }
+    function buildSimpleCsv(r) {
+      const lines = [SIMPLE_CSV_COLS.map(csvCell).join(',')];
+      (r.transactions || []).forEach((t, i) => {
+        lines.push([
+          i + 1, r.business_date, hm(t.start_time), hm(t.end_time),
+          t.room_name || ('Room ' + t.room_id), t.room_type_snapshot || '',
+          t.cust_name || '', Number(t.person || 0), Number(t.grand_total || 0),
+          t.final_payment_method || t.initial_payment_method || '', t.closed_by_name || t.opened_by_name || '',
+        ].map(csvCell).join(','));
+      });
+      lines.push(['', '', '', '', '', '', 'TOTAL', r.summary.closed_count, Number(r.summary.gross_billed_total != null ? r.summary.gross_billed_total : r.summary.net_revenue || 0), '', ''].map(csvCell).join(','));
+      return lines.join('\r\n') + '\r\n';
+    }
+    function downloadSimpleCsv(r) {
+      const blob = new Blob([buildSimpleCsv(r)], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `tutup-hari_ringkas_${r.business_date}.csv`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+
+    // --- init ---
+    if (!canClose) {
+      // Non admin/supervisor: endpoint 403, tampilkan gate.
+      gate();
+    } else {
+      document.getElementById('repMain').style.display = 'block';
+      document.getElementById('repDate').value = todayBusinessDate();
+      document.getElementById('btnShow').addEventListener('click', show);
+      document.getElementById('btnCsv').addEventListener('click', async () => {
+        try {
+          if (repView === 'simple') {
+            if (!lastReport) { showToast('Tampilkan laporan dulu.', 'error'); return; }
+            downloadSimpleCsv(lastReport);
+          } else {
+            await Api.downloadDailyCsv(document.getElementById('repDate').value);
+          }
+        } catch (err) { showToast(err.message, 'error'); }
+      });
+      document.getElementById('repViewToggle').addEventListener('click', (e) => {
+        const b = e.target.closest('button[data-view]');
+        if (!b || b.dataset.view === repView) return;
+        repView = b.dataset.view;
+        localStorage.setItem('grpos-reports-view', repView);
+        syncViewToggle();
+        if (lastReport) renderReport(lastReport);
+      });
+      document.getElementById('btnClose').addEventListener('click', openCloseModal);
+      syncViewToggle();
+      show();
+      loadHistory();
+    }
+  </script>
+</body>
+</html>

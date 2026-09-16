@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Tutup Kasir - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+<script src="/js/theme-boot.js"></script>
+<style>
+  .k-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin: 4px 0 16px; }
+  .k-card { background: var(--card-inset); border: 1px solid var(--border-soft); border-radius: 10px; padding: 12px 14px; }
+  .k-card .k { font-size: 11px; color: var(--text-muted); }
+  .k-card .v { font-size: 19px; font-weight: 800; margin-top: 3px; }
+  .k-card .v.warn { color: var(--red); }
+  .k-card .v.ok { color: var(--green); }
+  .muted-note { font-size: 11.5px; color: var(--text-muted); }
+  .k-row { display: flex; gap: 10px; align-items: flex-end; flex-wrap: wrap; }
+  table.summary-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+</style>
+</head>
+<body>
+  <div id="shell"></div>
+  <div id="pageContent">
+    <div id="kWrap"><p class="muted-note">Memuat…</p></div>
+
+    <div class="card" style="margin-top:16px">
+      <h3 style="margin:0 0 8px">Riwayat Shift</h3>
+      <div class="k-row" style="margin-bottom:10px">
+        <div><label class="muted-note">Dari</label><br><input type="date" id="hFrom" class="field" style="margin:0"></div>
+        <div><label class="muted-note">Sampai</label><br><input type="date" id="hTo" class="field" style="margin:0"></div>
+        <button class="btn btn-outline" id="btnHist">Tampilkan</button>
+      </div>
+      <div id="histWrap" style="overflow-x:auto"><p class="muted-note">—</p></div>
+    </div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script src="/js/receipt-print.js"></script>
+  <script src="/js/qz-print.js"></script>
+  <script>
+    renderLayout({ active: 'kasir', title: 'Tutup Kasir', subtitle: 'Shift & rekonsiliasi kas' });
+    const me = getUser() || {};
+    const isMgr = ['admin', 'supervisor'].includes(me.role);
+    function rp(n) { return 'Rp' + Number(n || 0).toLocaleString('id-ID'); }
+    function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+    async function loadCurrent() {
+      const wrap = document.getElementById('kWrap');
+      wrap.innerHTML = '<p class="muted-note">Memuat…</p>';
+      try {
+        const { shift, report } = await Api.currentShift();
+        if (!shift) { wrap.innerHTML = openForm(); wireOpen(); return; }
+        wrap.innerHTML = openShiftView(report);
+        wireClose(shift.id, report);
+      } catch (e) {
+        wrap.innerHTML = `<div class="card"><p class="error-text" style="display:block">${esc(e.message)}</p></div>`;
+      }
+    }
+
+    function openForm() {
+      return `<div class="card">
+        <h3 style="margin:0 0 6px">Buka Kasir</h3>
+        <p class="muted-note">Belum ada shift terbuka untukmu. Masukkan modal kasir (kas di laci) lalu buka kasir.</p>
+        <label class="field-label">Modal Kasir / kas laci (Rp)</label>
+        <input class="field" id="openFloat" type="number" min="0" value="0" />
+        <div id="openErr" class="error-text" style="display:none"></div>
+        <button class="btn btn-primary btn-block" id="btnOpen" style="margin-top:8px">Buka Kasir</button>
+      </div>`;
+    }
+    function wireOpen() {
+      document.getElementById('btnOpen').addEventListener('click', async () => {
+        const btn = document.getElementById('btnOpen');
+        const err = document.getElementById('openErr');
+        err.style.display = 'none';
+        btn.disabled = true;
+        try {
+          await Api.openShift(Number(document.getElementById('openFloat').value) || 0);
+          showToast('Kasir dibuka.');
+          await loadCurrent();
+        } catch (e) { err.textContent = e.message; err.style.display = 'block'; btn.disabled = false; }
+      });
+    }
+
+    function methodRows(r) {
+      return r.by_method.map((m) => `<tr><td>${esc(m.method)}</td><td class="num">${m.count}</td><td class="num">${rp(m.amount)}</td></tr>`).join('');
+    }
+    function openShiftView(r) {
+      const s = r.shift, c = r.cash, t = r.totals;
+      return `<div class="card">
+        <h3 style="margin:0 0 2px">Shift aktif — dibuka ${esc(s.opened_at)} · ${esc(s.terminal_id || '')}</h3>
+        <div class="k-cards">
+          <div class="k-card"><div class="k">Total diterima (shift)</div><div class="v">${rp(t.collected)}</div></div>
+          <div class="k-card"><div class="k">Tunai</div><div class="v">${rp(c.cash_sales)}</div></div>
+          <div class="k-card"><div class="k">Non-tunai</div><div class="v">${rp(c.non_cash)}</div></div>
+          <div class="k-card"><div class="k">Kamar dibuka / ditutup</div><div class="v">${t.rooms_opened} / ${t.rooms_closed}</div></div>
+        </div>
+        <div style="overflow-x:auto"><table class="summary-table">
+          <thead><tr><th>Metode</th><th class="num">Jml</th><th class="num">Nilai</th></tr></thead>
+          <tbody>${methodRows(r)}</tbody>
+        </table></div>
+        <div class="k-cards" style="margin-top:10px">
+          <div class="k-card"><div class="k">Modal Kasir</div><div class="v">${rp(c.opening_float)}</div></div>
+          <div class="k-card"><div class="k">Kas seharusnya (modal + tunai)</div><div class="v">${rp(c.expected_cash)}</div></div>
+        </div>
+        <p class="muted-note" style="margin-top:6px">"Kas seharusnya" cuma buat cocokkan uang FISIK di laci - BUKAN angka omset. Omset shift ini = "Total diterima" (${rp(t.collected)}) di atas, modal tidak ikut dihitung.</p>
+        <hr style="border:none;border-top:1px solid var(--border-soft);margin:14px 0" />
+        <h3 style="margin:0 0 6px">Tutup Kasir</h3>
+        <label class="field-label">Kas fisik dihitung (Rp)</label>
+        <input class="field" id="countedCash" type="number" min="0" value="${c.expected_cash}" />
+        <div class="k-card" id="varBox" style="margin:6px 0"><div class="k">Selisih (dihitung − seharusnya)</div><div class="v" id="varVal">Rp0</div></div>
+        <label class="field-label">Catatan (opsional)</label>
+        <input class="field" id="closeNote" placeholder="mis. selisih karena tukar uang kecil" />
+        <div id="closeErr" class="error-text" style="display:none"></div>
+        <button class="btn btn-pink btn-block" id="btnClose" style="margin-top:8px">Tutup Kasir &amp; Cetak</button>
+      </div>`;
+    }
+    function wireClose(shiftId, r) {
+      const expected = r.cash.expected_cash;
+      const cc = document.getElementById('countedCash');
+      const varVal = document.getElementById('varVal');
+      const varBox = document.getElementById('varBox');
+      function upd() {
+        const d = (Number(cc.value) || 0) - expected;
+        varVal.textContent = (d > 0 ? '+' : '') + rp(d);
+        varVal.className = 'v ' + (d === 0 ? 'ok' : 'warn');
+        varBox.style.borderColor = d === 0 ? 'var(--green)' : 'var(--red)';
+      }
+      cc.addEventListener('input', upd); upd();
+      document.getElementById('btnClose').addEventListener('click', async () => {
+        const btn = document.getElementById('btnClose');
+        const err = document.getElementById('closeErr');
+        err.style.display = 'none';
+        if (!confirm('Tutup kasir sekarang? Shift tidak bisa dibuka lagi.')) return;
+        btn.disabled = true;
+        try {
+          const { report } = await Api.closeShift(shiftId, Number(cc.value) || 0, document.getElementById('closeNote').value.trim());
+          showToast('Kasir ditutup.');
+          try { printShift(report); } catch (e) { showToast('Struk gagal cetak: ' + e.message, 'error'); }
+          await loadCurrent();
+          await loadHistory();
+        } catch (e) { err.textContent = e.message; err.style.display = 'block'; btn.disabled = false; }
+      });
+    }
+
+    function printShift(report) {
+      const lines = QzPrint.formatShiftClose({
+        outlet_name: null,
+        cashier_name: me.full_name || me.username,
+        report,
+      });
+      ReceiptPrint.printLines(lines, { title: 'Tutup Kasir' });
+    }
+
+    // --- riwayat ---
+    function localDate(d) { return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0'); }
+    (function initDates() {
+      const to = new Date(); const from = new Date(); from.setDate(from.getDate() - 6);
+      document.getElementById('hFrom').value = localDate(from);
+      document.getElementById('hTo').value = localDate(to);
+    })();
+    async function loadHistory() {
+      const el = document.getElementById('histWrap');
+      el.innerHTML = '<p class="muted-note">Memuat…</p>';
+      try {
+        const { shifts } = await Api.shiftHistory({ from: document.getElementById('hFrom').value, to: document.getElementById('hTo').value });
+        if (!shifts.length) { el.innerHTML = '<p class="muted-note">Tidak ada shift pada rentang ini.</p>'; return; }
+        el.innerHTML = `<table class="summary-table">
+          <thead><tr><th>Kasir</th><th>Terminal</th><th>Buka</th><th>Tutup</th><th class="num">Modal</th><th class="num">Kas seharusnya</th><th class="num">Kas dihitung</th><th class="num">Selisih</th><th>Status</th></tr></thead>
+          <tbody>${shifts.map((s) => {
+            const v = s.variance == null ? null : Number(s.variance);
+            const vTxt = v == null ? '—' : `<span style="${v ? 'color:var(--red);font-weight:700' : ''}">${(v > 0 ? '+' : '') + rp(v)}</span>`;
+            return `<tr>
+              <td>${esc(s.cashier_name)}</td><td>${esc(s.terminal_id || '')}</td>
+              <td>${esc(String(s.opened_at || '').replace('T', ' ').slice(0, 16))}</td>
+              <td>${esc(s.closed_at ? String(s.closed_at).replace('T', ' ').slice(0, 16) : '—')}</td>
+              <td class="num">${rp(s.opening_float)}</td>
+              <td class="num">${s.expected_cash == null ? '—' : rp(s.expected_cash)}</td>
+              <td class="num">${s.counted_cash == null ? '—' : rp(s.counted_cash)}</td>
+              <td class="num">${vTxt}</td>
+              <td>${s.status === 'open' ? '🟢 buka' : 'ditutup'}</td>
+            </tr>`;
+          }).join('')}</tbody></table>`;
+      } catch (e) {
+        el.innerHTML = `<p class="error-text" style="display:block">${esc(e.message)}</p>`;
+      }
+    }
+    document.getElementById('btnHist').addEventListener('click', loadHistory);
+
+    loadCurrent();
+    loadHistory();
+  </script>
+</body>
+</html>

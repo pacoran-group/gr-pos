@@ -1,0 +1,326 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Pengeluaran - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+<script src="/js/theme-boot.js"></script>
+<style>
+  .exp-form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16px; }
+  .exp-form-grid .full { grid-column: 1 / -1; }
+  .exp-form-grid textarea.field { min-height: 64px; resize: vertical; }
+  .exp-toolbar { display: flex; gap: 12px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 12px; }
+  .exp-toolbar label { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+  .exp-toolbar input { padding: 7px 9px; }
+  .exp-toolbar input[type="text"] { width: 150px; }
+  #expSummary { font-size: 13px; font-weight: 700; margin: 4px 0 12px; }
+  #expWrap { overflow-x: auto; }
+  .exp-link { color: var(--cyan); text-decoration: underline; }
+  .exp-actions .btn { padding: 4px 9px; font-size: 11px; }
+  .muted-note { font-size: 11.5px; color: var(--text-muted); }
+  .exp-qr-box { display: flex; align-items: center; gap: 14px; margin-top: 4px; flex-wrap: wrap; }
+  .exp-qr-box #receiptQr { flex: none; border-radius: 6px; background: #fff; padding: 6px; width: 112px; height: 112px; }
+  .exp-qr-box .muted-note { max-width: 360px; line-height: 1.5; }
+</style>
+</head>
+<body>
+  <div id="shell"></div>
+  <div id="pageContent">
+    <div id="expGate" style="display:none" class="card">Halaman ini khusus admin / supervisor.</div>
+
+    <div id="expMain" style="display:none">
+      <div class="card">
+        <h3 style="margin-top:0" id="formTitle">Input Pengeluaran</h3>
+        <p class="muted-note" style="margin-top:-6px">
+          Catat total pengeluaran per kuitansi. Rincian per-item (OCR) diproses terpisah di sistem pusat.
+        </p>
+
+        <div class="exp-form-grid">
+          <div>
+            <label class="field-label" for="fDate">Tanggal Transaksi</label>
+            <input class="field" type="date" id="fDate" />
+          </div>
+          <div>
+            <label class="field-label" for="fVendor">Nama Vendor</label>
+            <input class="field" type="text" id="fVendor" maxlength="150" placeholder="mis. Toko Sembako Jaya" />
+          </div>
+          <div>
+            <label class="field-label" for="fAmount">Total Pengeluaran (Rp)</label>
+            <input class="field" type="number" id="fAmount" min="0" step="100" placeholder="0" />
+          </div>
+          <div>
+            <label class="field-label" for="fReceipt">Link Bukti Kuitansi (Google Drive)</label>
+            <input class="field" type="url" id="fReceipt" maxlength="500" placeholder="https://drive.google.com/..." />
+          </div>
+          <div class="full">
+            <label class="field-label" for="fNote">Catatan</label>
+            <textarea class="field" id="fNote" maxlength="500" placeholder="Keterangan tambahan (opsional)"></textarea>
+          </div>
+          <div class="full exp-qr-box">
+            <div id="receiptQr"></div>
+            <div class="muted-note">
+              Scan dari HP untuk buka folder Google Drive bukti pembayaran, lalu foto/upload bukti transfer langsung dari sana.
+              Setelah selesai, buka filenya di Drive &rarr; <b>Bagikan</b> &rarr; <b>Salin link</b>, lalu tempel di kolom
+              "Link Bukti Kuitansi" di atas.
+              <br /><a class="exp-link" id="receiptFolderLink" href="#" target="_blank" rel="noopener">Atau buka folder langsung di perangkat ini</a>
+            </div>
+          </div>
+        </div>
+
+        <div id="formErr" class="error-text" style="display:none"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn btn-primary" id="btnSave">Simpan Pengeluaran</button>
+          <button class="btn btn-outline" id="btnCancelEdit" style="display:none">Batal Edit</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="exp-toolbar">
+          <div>
+            <label for="qFrom">Dari tanggal</label>
+            <input class="field" type="date" id="qFrom" style="margin:0" />
+          </div>
+          <div>
+            <label for="qTo">Sampai tanggal</label>
+            <input class="field" type="date" id="qTo" style="margin:0" />
+          </div>
+          <button class="btn btn-primary" id="btnFilter">Terapkan</button>
+          <button class="btn btn-outline" id="btnReset">Bulan ini</button>
+          <button class="btn btn-outline" id="btnCsv" style="margin-left:auto">Unduh CSV</button>
+        </div>
+        <div id="expSummary"></div>
+        <div id="expWrap"><p class="muted-note">Memuat…</p></div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script>
+    renderLayout({ active: 'pengeluaran', title: 'Pengeluaran', subtitle: 'Catatan pengeluaran unit' });
+
+    // Folder bersama tempat staff mengunggah foto bukti transfer.
+    const RECEIPT_FOLDER_URL = 'https://drive.google.com/drive/folders/1aSQogLpz1VO-zM8Z_bQN4cPGQV1N4FNA?usp=sharing';
+
+    const canManage = ['admin', 'supervisor'].includes((getUser() || {}).role);
+    let editingId = null;
+    let lastRows = [];
+
+    function rp(n) { return 'Rp' + Number(n || 0).toLocaleString('id-ID'); }
+    function escHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>
+        ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function pad2(n) { return String(n).padStart(2, '0'); }
+    function ymd(d) { return d.getFullYear() + '-' + pad2(d.getMonth() + 1) + '-' + pad2(d.getDate()); }
+    function dOnly(v) { return v ? String(v).slice(0, 10) : ''; }
+
+    function setDefaultRange() {
+      const now = new Date();
+      document.getElementById('qFrom').value = ymd(new Date(now.getFullYear(), now.getMonth(), 1));
+      document.getElementById('qTo').value = ymd(now);
+    }
+
+    function clearForm() {
+      editingId = null;
+      document.getElementById('formTitle').textContent = 'Input Pengeluaran';
+      document.getElementById('btnSave').textContent = 'Simpan Pengeluaran';
+      document.getElementById('btnCancelEdit').style.display = 'none';
+      document.getElementById('fDate').value = ymd(new Date());
+      document.getElementById('fVendor').value = '';
+      document.getElementById('fAmount').value = '';
+      document.getElementById('fReceipt').value = '';
+      document.getElementById('fNote').value = '';
+      document.getElementById('formErr').style.display = 'none';
+    }
+
+    function fillForm(row) {
+      editingId = row.expense_id;
+      document.getElementById('formTitle').textContent = 'Edit Pengeluaran #' + row.expense_id;
+      document.getElementById('btnSave').textContent = 'Simpan Perubahan';
+      document.getElementById('btnCancelEdit').style.display = 'inline-flex';
+      document.getElementById('fDate').value = dOnly(row.expense_date);
+      document.getElementById('fVendor').value = row.vendor_name || '';
+      document.getElementById('fAmount').value = Number(row.amount) || '';
+      document.getElementById('fReceipt').value = row.receipt_url || '';
+      document.getElementById('fNote').value = row.note || '';
+      document.getElementById('formErr').style.display = 'none';
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    }
+
+    function formBody() {
+      return {
+        expense_date: document.getElementById('fDate').value,
+        vendor_name: document.getElementById('fVendor').value.trim(),
+        amount: Number(document.getElementById('fAmount').value),
+        note: document.getElementById('fNote').value.trim(),
+        receipt_url: document.getElementById('fReceipt').value.trim(),
+      };
+    }
+
+    async function save() {
+      const btn = document.getElementById('btnSave');
+      const errEl = document.getElementById('formErr');
+      errEl.style.display = 'none';
+      const body = formBody();
+      if (!body.expense_date) { errEl.textContent = 'Tanggal transaksi wajib diisi.'; errEl.style.display = 'block'; return; }
+      if (!body.vendor_name) { errEl.textContent = 'Nama vendor wajib diisi.'; errEl.style.display = 'block'; return; }
+      if (!(body.amount > 0)) { errEl.textContent = 'Total pengeluaran harus lebih dari 0.'; errEl.style.display = 'block'; return; }
+      btn.disabled = true;
+      try {
+        if (editingId) {
+          await Api.updateExpense(editingId, body);
+          showToast('Pengeluaran diperbarui.');
+        } else {
+          await Api.createExpense(body);
+          showToast('Pengeluaran tersimpan.');
+        }
+        clearForm();
+        await load();
+      } catch (err) {
+        if (err.status === 403) { gate(); return; }
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    function gate() {
+      document.getElementById('expMain').style.display = 'none';
+      document.getElementById('expGate').style.display = 'block';
+    }
+
+    async function load() {
+      try {
+        const res = await Api.listExpenses({
+          from: document.getElementById('qFrom').value,
+          to: document.getElementById('qTo').value,
+        });
+        lastRows = res.expenses || [];
+        renderList(res.summary);
+      } catch (err) {
+        if (err.status === 403) { gate(); return; }
+        document.getElementById('expWrap').innerHTML =
+          `<p class="error-text" style="display:block">${escHtml(err.message)}</p>`;
+      }
+    }
+
+    function renderList(summary) {
+      document.getElementById('expSummary').textContent =
+        `${Number(summary.count).toLocaleString('id-ID')} entri · Total ${rp(summary.total)}`;
+
+      if (!lastRows.length) {
+        document.getElementById('expWrap').innerHTML = '<p class="muted-note">Belum ada pengeluaran pada rentang ini.</p>';
+        return;
+      }
+      const rows = lastRows.map((r) => {
+        const bukti = r.receipt_url
+          ? `<a class="exp-link" href="${escHtml(r.receipt_url)}" target="_blank" rel="noopener">buka</a>`
+          : '<span class="muted-note">—</span>';
+        return `<tr>
+          <td>${escHtml(dOnly(r.expense_date))}</td>
+          <td>${escHtml(r.vendor_name)}</td>
+          <td class="num">${rp(r.amount)}</td>
+          <td>${escHtml(r.note || '')}</td>
+          <td class="num">${bukti}</td>
+          <td class="exp-actions" style="white-space:nowrap">
+            ${canManage ? `<button class="btn btn-outline" data-act="edit" data-id="${r.expense_id}">Edit</button>
+            <button class="btn btn-outline" data-act="del" data-id="${r.expense_id}">Hapus</button>` : ''}
+          </td>
+        </tr>`;
+      }).join('');
+
+      document.getElementById('expWrap').innerHTML = `
+        <table class="summary-table">
+          <thead><tr>
+            <th>Tgl</th><th>Vendor</th>
+            <th class="num">Total</th><th>Catatan</th><th class="num">Bukti</th><th></th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>`;
+
+      document.querySelectorAll('#expWrap button[data-act]').forEach((b) => {
+        b.addEventListener('click', () => rowAction(b.dataset.act, Number(b.dataset.id), b));
+      });
+    }
+
+    let pendingDelete = null;
+    async function rowAction(act, id, btn) {
+      if (act === 'edit') {
+        const row = lastRows.find((r) => r.expense_id === id);
+        if (row) fillForm(row);
+        return;
+      }
+      // hapus: konfirmasi 2-langkah di tombol (tanpa dialog blocking)
+      if (pendingDelete && pendingDelete.id === id) {
+        clearTimeout(pendingDelete.timer);
+        pendingDelete = null;
+        try {
+          await Api.deleteExpense(id);
+          showToast('Pengeluaran dihapus.');
+          if (editingId === id) clearForm();
+          await load();
+        } catch (err) {
+          showToast(err.message, 'error');
+        }
+        return;
+      }
+      if (pendingDelete) { pendingDelete.btn.textContent = 'Hapus'; clearTimeout(pendingDelete.timer); }
+      btn.textContent = 'Yakin?';
+      pendingDelete = {
+        id, btn,
+        timer: setTimeout(() => { btn.textContent = 'Hapus'; pendingDelete = null; }, 3500),
+      };
+    }
+
+    function downloadCsv() {
+      if (!lastRows.length) { showToast('Tidak ada data untuk diunduh.', 'error'); return; }
+      const cols = ['tanggal', 'vendor', 'total', 'catatan', 'link_bukti', 'dibuat_oleh'];
+      const cell = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      const lines = [cols.map(cell).join(',')];
+      let total = 0;
+      for (const r of lastRows) {
+        total += Number(r.amount);
+        lines.push([dOnly(r.expense_date), r.vendor_name,
+          Number(r.amount), r.note || '', r.receipt_url || '', r.created_by_name || ''].map(cell).join(','));
+      }
+      lines.push(['', '', 'TOTAL', total, '', ''].map(cell).join(','));
+      const blob = new Blob([lines.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `pengeluaran_${document.getElementById('qFrom').value}_sd_${document.getElementById('qTo').value}.csv`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+
+    function renderReceiptQr() {
+      document.getElementById('receiptFolderLink').href = RECEIPT_FOLDER_URL;
+      const box = document.getElementById('receiptQr');
+      if (typeof QRCode === 'undefined') { box.style.display = 'none'; return; }
+      try {
+        new QRCode(box, { text: RECEIPT_FOLDER_URL, width: 112, height: 112, correctLevel: QRCode.CorrectLevel.M });
+      } catch (_) {
+        box.style.display = 'none';
+      }
+    }
+
+    // --- init ---
+    if (!canManage) {
+      gate();
+    } else {
+      document.getElementById('expMain').style.display = 'block';
+      setDefaultRange();
+      clearForm();
+      renderReceiptQr();
+      document.getElementById('btnSave').addEventListener('click', save);
+      document.getElementById('btnCancelEdit').addEventListener('click', clearForm);
+      document.getElementById('btnFilter').addEventListener('click', load);
+      document.getElementById('btnReset').addEventListener('click', () => { setDefaultRange(); load(); });
+      document.getElementById('btnCsv').addEventListener('click', downloadCsv);
+      load();
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,1021 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+<meta charset="UTF-8" />
+<title>Inventory - Grand Royal POS</title>
+<link rel="stylesheet" href="/css/theme.css" />
+<script src="/js/theme-boot.js"></script>
+<style>
+  /* Badge status stok - pakai var warna yang sudah ada di theme.css */
+  .stk-pill { padding: 4px 10px; border-radius: 12px; font-size: 11px; font-weight: 700; white-space: nowrap; }
+  .stk-ok { background: var(--green-dim); color: var(--green); }
+  .stk-low { background: rgba(255, 209, 102, 0.15); color: var(--yellow); }
+  .stk-neg { background: rgba(255, 92, 122, 0.15); color: var(--red); }
+  .inv-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 4px; }
+  .inv-toolbar label { font-size: 12px; font-weight: 400; color: var(--text-muted); display: flex; align-items: center; gap: 6px; }
+  .inv-actions { display: flex; gap: 6px; justify-content: flex-end; }
+  .inv-actions .btn { padding: 5px 10px; font-size: 11.5px; }
+  #invWrap { overflow-x: auto; }
+  #invMeta { font-size: 12px; color: var(--text-muted); margin-top: 10px; }
+
+  /* Toggle Stok & Input <-> Rencana Kirim */
+  .inv-viewbar { margin-bottom: 14px; }
+  .rep-viewtoggle { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; }
+  .rep-viewtoggle button {
+    background: var(--card-inset); color: var(--text-muted); border: none; cursor: pointer;
+    padding: 7px 16px; font-size: 12px; font-weight: 700;
+  }
+  .rep-viewtoggle button + button { border-left: 1px solid var(--border); }
+  .rep-viewtoggle button.active { background: var(--cyan-dim); color: var(--cyan); }
+
+  /* Laporan Rencana Kirim */
+  .rk-toolbar { display: flex; gap: 14px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 14px; }
+  .rk-toolbar label { display: block; font-size: 11px; color: var(--text-muted); margin-bottom: 4px; }
+  .rk-toolbar input, .rk-toolbar select { padding: 7px 9px; width: 92px; }
+  .rk-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; margin-bottom: 16px; }
+  .rk-card { background: var(--card-inset); border: 1px solid var(--border-soft); border-radius: 10px; padding: 12px 14px; }
+  .rk-card .k { font-size: 11px; color: var(--text-muted); }
+  .rk-card .v { font-size: 18px; font-weight: 800; margin-top: 3px; }
+  .rk-card .v.bad { color: var(--red); }
+  .rk-card .v.warn { color: var(--yellow); }
+  .st-habis, .st-kritis { background: rgba(255,92,122,0.15); color: var(--red); }
+  .st-menipis { background: rgba(255,209,102,0.15); color: var(--yellow); }
+  .st-aman { background: var(--green-dim); color: var(--green); }
+  .st-overstock { background: var(--blue-dim); color: var(--blue); }
+  .st-mati { background: var(--gray-dim); color: var(--text-faint); }
+  .kelas { font-size: 10px; font-weight: 700; letter-spacing: .03em; text-transform: uppercase; color: var(--text-faint); }
+  .kelas.fast { color: var(--green); }
+  .kelas.medium { color: var(--blue); }
+  .kelas.slow { color: var(--yellow); }
+  tr.rk-need td { background: rgba(255,92,122,0.05); }
+
+  /* Stock Opname */
+  .op-toolbar { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .op-toolbar input[type="text"] { max-width: 240px; }
+  /* Selector harus setidaknya sespesifik `input.field` (theme.css) - kalau
+     cuma `.op-fisik` (1 class), width:100% dari situ selalu menang walau
+     aturan ini datang belakangan (compound selector `input.field` lebih
+     spesifik daripada class tunggal, terlepas urutan). */
+  input.op-fisik { width: 110px; padding: 6px 8px; text-align: right; }
+  .op-delta { font-weight: 700; }
+  .op-delta.zero { color: var(--text-muted); }
+  .op-delta.plus { color: var(--green); }
+  .op-delta.minus { color: var(--red); }
+  .op-status { padding: 3px 9px; border-radius: 10px; font-size: 11px; font-weight: 700; }
+  .op-status.pending { background: rgba(255,209,102,0.15); color: var(--yellow); }
+  .op-status.applied { background: var(--green-dim); color: var(--green); }
+  .op-status.rejected { background: rgba(255,92,122,0.15); color: var(--red); }
+  .op-sessions tr { cursor: pointer; }
+  .op-statustabs { display: inline-flex; border: 1px solid var(--border); border-radius: var(--radius-sm); overflow: hidden; margin-bottom: 10px; }
+  .op-statustabs button { background: var(--card-inset); color: var(--text-muted); border: none; cursor: pointer; padding: 6px 14px; font-size: 12px; font-weight: 700; }
+  .op-statustabs button + button { border-left: 1px solid var(--border); }
+  .op-statustabs button.active { background: var(--cyan-dim); color: var(--cyan); }
+</style>
+</head>
+<body>
+  <div id="shell"></div>
+  <div id="pageContent">
+    <div class="inv-viewbar">
+      <div class="rep-viewtoggle" id="invViewToggle">
+        <button data-view="stok">Stok &amp; Input</button>
+        <button data-view="terjual">Barang Terjual</button>
+        <button data-view="kirim">Rencana Kirim</button>
+        <button data-view="opname">Stock Opname</button>
+      </div>
+    </div>
+
+    <div id="viewStok">
+      <div class="card">
+        <div class="inv-toolbar">
+          <h3 style="margin:0">Stok Produk <small>Sub-gudang unit ini. Semua produk aktif; stok awal 0 sampai diinput.</small></h3>
+          <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+            <select id="invCategory" class="field" style="margin:0;width:auto"><option value="">Semua kategori</option></select>
+            <label><input type="checkbox" id="lowOnly" /> Hanya stok menipis / minus</label>
+          </div>
+        </div>
+        <div id="invWrap">
+          <table class="summary-table">
+            <thead>
+              <tr>
+                <th>Produk</th><th>Kategori</th><th class="num">Harga</th>
+                <th class="num">Stok</th><th class="num">Min</th><th>Status</th><th></th>
+              </tr>
+            </thead>
+            <tbody id="invBody"></tbody>
+          </table>
+        </div>
+        <div id="invMeta"></div>
+      </div>
+    </div>
+
+    <div id="viewTerjual" style="display:none">
+      <div class="card">
+        <div class="inv-toolbar">
+          <h3 style="margin:0">Barang Terjual <small>Detail penjualan per periode bebas - siapkan sebelum hitung fisik / stock opname parsial per kategori.</small></h3>
+        </div>
+        <div class="rk-toolbar">
+          <div>
+            <label for="tjFrom">Dari tanggal</label>
+            <input type="date" id="tjFrom" class="field" style="margin:0;width:150px" />
+          </div>
+          <div>
+            <label for="tjTo">Sampai tanggal</label>
+            <input type="date" id="tjTo" class="field" style="margin:0;width:150px" />
+          </div>
+          <div>
+            <label for="tjCategory">Kategori</label>
+            <select id="tjCategory" class="field" style="margin:0;width:160px"><option value="">Semua kategori</option></select>
+          </div>
+          <div>
+            <label for="tjSort">Urutkan</label>
+            <select id="tjSort" class="field" style="margin:0;width:150px">
+              <option value="sold_qty">Terjual (banyak dulu)</option>
+              <option value="name">Nama produk (A-Z)</option>
+              <option value="category">Kategori (A-Z)</option>
+              <option value="qty_on_hand">Sisa stok</option>
+            </select>
+          </div>
+          <button class="btn btn-primary" id="tjShow">Tampilkan</button>
+          <button class="btn btn-outline" id="tjCsv" style="margin-left:auto">Unduh CSV</button>
+        </div>
+        <div id="tjWrap"><p style="font-size:12px;color:var(--text-muted)">Memuat…</p></div>
+      </div>
+    </div>
+
+    <div id="viewKirim" style="display:none">
+      <div class="card">
+        <div class="inv-toolbar">
+          <h3 style="margin:0">Rencana Kirim <small>Kecepatan jual, sisa stok, dan saran jumlah kirim berikutnya — gaya minimarket.</small></h3>
+        </div>
+        <div class="rk-toolbar">
+          <div>
+            <label for="rkDays">Periode analisa</label>
+            <select id="rkDays" class="field" style="margin:0">
+              <option value="7">7 hari</option>
+              <option value="14">14 hari</option>
+              <option value="30">30 hari</option>
+            </select>
+          </div>
+          <div>
+            <label for="rkLead">Lead kirim (hari)</label>
+            <input type="number" id="rkLead" class="field" style="margin:0" min="0" max="30" value="3" />
+          </div>
+          <div>
+            <label for="rkCover">Target stok (hari)</label>
+            <input type="number" id="rkCover" class="field" style="margin:0" min="1" max="60" value="10" />
+          </div>
+          <button class="btn btn-primary" id="rkShow">Hitung</button>
+          <label style="font-size:12px;color:var(--text-muted);display:flex;align-items:center;gap:6px">
+            <input type="checkbox" id="rkNeedOnly" /> Hanya yang perlu dikirim
+          </label>
+          <button class="btn btn-outline" id="rkCsv" style="margin-left:auto">Unduh CSV</button>
+        </div>
+        <div id="rkWrap"><p style="font-size:12px;color:var(--text-muted)">Memuat…</p></div>
+      </div>
+    </div>
+
+    <div id="viewOpname" style="display:none">
+      <div class="card" id="opSubmitCard">
+        <div class="inv-toolbar">
+          <h3 style="margin:0">Hitung Fisik <small>Isi stok fisik hasil hitung tutup toko. Baris kosong tidak dikirim. Stok LANGSUNG disesuaikan begitu dikirim - laporan otomatis dikirim ke email gudang.</small></h3>
+        </div>
+        <div class="op-toolbar">
+          <input type="text" class="field" id="opFilter" placeholder="Cari produk…" />
+          <select id="opCategory" class="field" style="width:auto"><option value="">Semua kategori</option></select>
+          <input type="text" class="field" id="opNote" placeholder="Catatan sesi (opsional, mis. 'opname tutup 8 Sep')" style="max-width:320px" />
+          <button class="btn btn-outline" id="opPrintSheet" style="margin-left:auto">🖶 Cetak Lembar Hitung</button>
+        </div>
+        <p class="muted" style="font-size:11px;margin:-6px 0 10px">Cetak mengikuti filter pencarian/kategori di atas - kosongkan filter utk cetak semua produk.</p>
+        <div style="overflow-x:auto">
+          <table class="summary-table">
+            <thead><tr><th>Produk</th><th class="num">Stok Sistem</th><th class="num">Stok Fisik</th><th class="num">Selisih</th></tr></thead>
+            <tbody id="opBody"></tbody>
+          </table>
+        </div>
+        <div id="opErr" class="error-text" style="display:none;margin-top:10px"></div>
+        <button class="btn btn-primary" id="opSubmit" style="margin-top:12px">Kirim Hasil Opname</button>
+      </div>
+
+      <div class="card" style="margin-top:16px">
+        <h3 style="margin:0 0 10px">Sesi Opname</h3>
+        <div class="op-statustabs" id="opStatusTabs">
+          <button data-status="applied" class="active">Diterapkan</button>
+          <button data-status="pending">Menunggu</button>
+          <button data-status="rejected">Ditolak</button>
+        </div>
+        <div style="overflow-x:auto">
+          <table class="summary-table op-sessions">
+            <thead><tr><th>Tanggal</th><th>Oleh</th><th class="num">Item</th><th>Catatan</th><th>Status</th><th>Email</th></tr></thead>
+            <tbody id="opSessionsBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <div id="modalMount"></div>
+  </div>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/layout.js"></script>
+  <script>
+    renderLayout({
+      active: 'inventory',
+      title: 'Inventory',
+      subtitle: 'Stok produk',
+      onSearch: (q) => { filterTerm = q; renderTable(); },
+    });
+
+    const myRole = (getUser() || {}).role;
+    const canEdit = ['admin', 'supervisor', 'gudang'].includes(myRole);
+    // "Sesuaikan" bebas (set stok langsung tanpa opname) dikunci admin/supervisor
+    // sejak migration 014 - stokis ('gudang') pakai alur Stock Opname (tab
+    // terpisah) yang hasilnya baru diterapkan admin/supervisor.
+    const canAdjustFree = ['admin', 'supervisor'].includes(myRole);
+    const canSubmitOpname = ['admin', 'supervisor', 'gudang'].includes(myRole);
+    const canApplyOpname = ['admin', 'supervisor'].includes(myRole);
+    // Laporan "Barang Terjual" & "Rencana Kirim" berisi omzet/nilai order -
+    // stokis (gudang) cuma boleh Barang Masuk (di tab Stok & Input), Riwayat,
+    // dan Stock Opname. Server juga menegakkan ini (403) - ini cuma sembunyikan UI.
+    const canSeeSalesReports = ['admin', 'supervisor'].includes(myRole);
+    if (!canSeeSalesReports) {
+      document.querySelectorAll('#invViewToggle button[data-view="terjual"], #invViewToggle button[data-view="kirim"]')
+        .forEach((b) => (b.style.display = 'none'));
+    }
+    const modalMount = document.getElementById('modalMount');
+    function closeModal() { modalMount.innerHTML = ''; }
+    modalMount.addEventListener('click', (e) => { if (e.target === modalMount.firstElementChild) closeModal(); });
+
+    let allItems = [];
+    let filterTerm = '';
+
+    async function load() {
+      try {
+        const { items } = await Api.listInventory();
+        allItems = items;
+        populateCategoryFilters();
+        renderTable();
+        renderOpnameForm();
+      } catch (err) {
+        showToast('Gagal memuat stok: ' + err.message, 'error');
+      }
+    }
+
+    // Isi dropdown kategori (Stok & Input + Hitung Fisik) dari daftar produk
+    // yang sudah dimuat - tidak perlu request terpisah. Kategori "Barang
+    // Terjual" diisi dari respons servernya sendiri (lihat renderSalesDetail).
+    function populateCategoryFilters() {
+      const cats = [...new Set(allItems.map((it) => it.category).filter((c) => c && c !== '-'))].sort();
+      [document.getElementById('invCategory'), document.getElementById('opCategory')].forEach((sel) => {
+        const current = sel.value;
+        sel.innerHTML = '<option value="">Semua kategori</option>' +
+          cats.map((c) => `<option value="${escAttr(c)}">${escHtml(c)}</option>`).join('');
+        if (cats.includes(current)) sel.value = current;
+      });
+    }
+
+    function statusPill(it) {
+      if (Number(it.qty_on_hand) < 0) return '<span class="stk-pill stk-neg">MINUS</span>';
+      if (it.low) return '<span class="stk-pill stk-low">MENIPIS</span>';
+      return '<span class="stk-pill stk-ok">AMAN</span>';
+    }
+
+    function renderTable() {
+      const term = (filterTerm || '').toLowerCase();
+      const lowOnly = document.getElementById('lowOnly').checked;
+      const cat = document.getElementById('invCategory').value;
+      const rows = allItems.filter((it) => {
+        if (lowOnly && !(it.low || Number(it.qty_on_hand) < 0)) return false;
+        if (cat && it.category !== cat) return false;
+        if (term && !(it.product_name || '').toLowerCase().includes(term)) return false;
+        return true;
+      });
+
+      const body = document.getElementById('invBody');
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="7" style="color:var(--text-muted);padding:16px 4px">Tidak ada produk yang cocok.</td></tr>';
+      } else {
+        body.innerHTML = rows.map((it) => {
+          const actions = canEdit
+            ? `<div class="inv-actions">
+                 <button class="btn btn-primary" data-act="restock" data-id="${it.product_id}" data-name="${escAttr(it.product_name)}">Barang Masuk</button>
+                 ${canAdjustFree ? `<button class="btn btn-outline" data-act="adjust" data-id="${it.product_id}" data-name="${escAttr(it.product_name)}" data-qty="${it.qty_on_hand}">Sesuaikan</button>` : ''}
+                 <button class="btn btn-outline" data-act="hist" data-id="${it.product_id}" data-name="${escAttr(it.product_name)}">Riwayat</button>
+               </div>`
+            : `<div class="inv-actions">
+                 <button class="btn btn-outline" data-act="hist" data-id="${it.product_id}" data-name="${escAttr(it.product_name)}">Riwayat</button>
+               </div>`;
+          return `<tr>
+            <td>${escHtml(it.product_name)}</td>
+            <td>${escHtml(it.category || '-')}</td>
+            <td class="num">${rupiah(it.price)}</td>
+            <td class="num"><b>${it.qty_on_hand}</b>${it.unit ? ' ' + escHtml(it.unit) : ''}</td>
+            <td class="num">${it.min_stock}</td>
+            <td>${statusPill(it)}</td>
+            <td>${actions}</td>
+          </tr>`;
+        }).join('');
+      }
+
+      const neg = allItems.filter((it) => Number(it.qty_on_hand) < 0).length;
+      const low = allItems.filter((it) => it.low && Number(it.qty_on_hand) >= 0).length;
+      document.getElementById('invMeta').textContent =
+        `${allItems.length} produk aktif · ${neg} minus · ${low} menipis` +
+        (canEdit ? '' : ' · Anda hanya bisa melihat (input stok: admin/head/gudang).');
+
+      body.querySelectorAll('button[data-act]').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const { act, id, name, qty } = btn.dataset;
+          if (act === 'restock') openRestockModal({ id, name });
+          else if (act === 'adjust') openAdjustModal({ id, name, qty });
+          else openMovementsModal({ id, name });
+        });
+      });
+    }
+
+    document.getElementById('lowOnly').addEventListener('change', renderTable);
+    document.getElementById('invCategory').addEventListener('change', renderTable);
+
+    // ---------------------------------------------------------------
+    // Modal: Barang Masuk (restock, delta +qty)
+    // ---------------------------------------------------------------
+    function openRestockModal({ id, name }) {
+      modalMount.innerHTML = `
+        <div class="modal-overlay">
+          <div class="modal-box card">
+            <h3>Barang Masuk</h3>
+            <p class="muted">${escHtml(name)}</p>
+            <label class="field-label">Jumlah masuk</label>
+            <input class="field" id="rsQty" type="number" min="1" value="1" />
+            <label class="field-label">Catatan (opsional)</label>
+            <input class="field" id="rsNote" placeholder="mis. transfer dari gudang pusat / no. nota" />
+            <div id="rsErr" class="error-text" style="display:none"></div>
+            <button class="btn btn-primary btn-block" id="rsSubmit">Simpan</button>
+            <button class="btn btn-outline btn-block" id="rsCancel" style="margin-top:8px">Batal</button>
+          </div>
+        </div>`;
+      document.getElementById('rsCancel').addEventListener('click', closeModal);
+      document.getElementById('rsSubmit').addEventListener('click', async () => {
+        const btn = document.getElementById('rsSubmit');
+        const errEl = document.getElementById('rsErr');
+        errEl.style.display = 'none';
+        const qty = Number(document.getElementById('rsQty').value);
+        if (!(Number.isInteger(qty) && qty > 0)) { errEl.textContent = 'Jumlah harus bilangan bulat lebih dari 0.'; errEl.style.display = 'block'; return; }
+        btn.disabled = true;
+        try {
+          const res = await Api.restock(id, { qty, note: document.getElementById('rsNote').value.trim() });
+          closeModal();
+          showToast(`Stok ${name} kini ${res.qty_after}.`);
+          await load();
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.style.display = 'block';
+          btn.disabled = false;
+        }
+      });
+    }
+
+    // ---------------------------------------------------------------
+    // Modal: Sesuaikan / Stok Awal (set absolut)
+    // ---------------------------------------------------------------
+    function openAdjustModal({ id, name, qty }) {
+      modalMount.innerHTML = `
+        <div class="modal-overlay">
+          <div class="modal-box card">
+            <h3>Sesuaikan Stok</h3>
+            <p class="muted">${escHtml(name)} — tercatat sekarang <b>${qty}</b></p>
+            <label class="field-label">Stok fisik sebenarnya</label>
+            <input class="field" id="ajQty" type="number" min="0" value="${Number(qty) < 0 ? 0 : Number(qty)}" />
+            <label class="field-label">Catatan (opsional)</label>
+            <input class="field" id="ajNote" placeholder="mis. hasil hitung fisik / koreksi selisih" />
+            <div id="ajErr" class="error-text" style="display:none"></div>
+            <button class="btn btn-primary btn-block" id="ajSubmit">Simpan</button>
+            <button class="btn btn-outline btn-block" id="ajCancel" style="margin-top:8px">Batal</button>
+          </div>
+        </div>`;
+      document.getElementById('ajCancel').addEventListener('click', closeModal);
+      document.getElementById('ajSubmit').addEventListener('click', async () => {
+        const btn = document.getElementById('ajSubmit');
+        const errEl = document.getElementById('ajErr');
+        errEl.style.display = 'none';
+        const target = Number(document.getElementById('ajQty').value);
+        if (!(Number.isInteger(target) && target >= 0)) { errEl.textContent = 'Stok harus bilangan bulat 0 atau lebih.'; errEl.style.display = 'block'; return; }
+        btn.disabled = true;
+        try {
+          const res = await Api.adjustStock(id, { qty_on_hand: target, note: document.getElementById('ajNote').value.trim() });
+          closeModal();
+          showToast(`Stok ${name} disetel ke ${res.qty_after}.`);
+          await load();
+        } catch (err) {
+          errEl.textContent = err.message;
+          errEl.style.display = 'block';
+          btn.disabled = false;
+        }
+      });
+    }
+
+    // ---------------------------------------------------------------
+    // Modal: Riwayat mutasi (read-only, 50 terakhir)
+    // ---------------------------------------------------------------
+    const REASON_LABEL = {
+      opening: 'Stok awal', adjustment: 'Penyesuaian', restock: 'Barang masuk', sale: 'Terjual',
+      void_return: 'Void (kembali)', cancel_return: 'Batal transaksi', purchase_receipt: 'Terima pembelian',
+      transfer_in: 'Transfer masuk', transfer_out: 'Transfer keluar', stock_opname: 'Stock opname',
+    };
+    async function openMovementsModal({ id, name }) {
+      modalMount.innerHTML = `
+        <div class="modal-overlay">
+          <div class="modal-box card" style="max-width:640px">
+            <h3>Riwayat Stok</h3>
+            <p class="muted">${escHtml(name)} — 50 mutasi terakhir</p>
+            <div id="mvWrap" style="overflow-x:auto"><p class="muted">Memuat…</p></div>
+            <button class="btn btn-outline btn-block" id="mvClose" style="margin-top:12px">Tutup</button>
+          </div>
+        </div>`;
+      document.getElementById('mvClose').addEventListener('click', closeModal);
+      try {
+        const { movements } = await Api.getStockMovements(id);
+        const wrap = document.getElementById('mvWrap');
+        if (!movements.length) { wrap.innerHTML = '<p class="muted">Belum ada mutasi.</p>'; return; }
+        wrap.innerHTML = `
+          <table class="summary-table">
+            <thead><tr><th>Waktu</th><th>Jenis</th><th class="num">Δ</th><th class="num">Sisa</th><th>Catatan / Ref</th><th>Oleh</th></tr></thead>
+            <tbody>${movements.map((m) => {
+              const ref = m.note || (m.ref_trans_id ? m.ref_trans_id : '');
+              const d = Number(m.delta);
+              return `<tr>
+                <td>${new Date(m.created_at).toLocaleString('id-ID')}</td>
+                <td>${REASON_LABEL[m.reason] || m.reason}</td>
+                <td class="num" style="color:${d < 0 ? 'var(--red)' : 'var(--green)'}">${d > 0 ? '+' : ''}${d}</td>
+                <td class="num">${m.qty_after}</td>
+                <td>${escHtml(ref || '-')}</td>
+                <td>${escHtml(m.created_by_name || '-')}</td>
+              </tr>`;
+            }).join('')}</tbody>
+          </table>`;
+      } catch (err) {
+        document.getElementById('mvWrap').innerHTML = `<p class="error-text" style="margin:0">${escHtml(err.message)}</p>`;
+      }
+    }
+
+    function escHtml(s) {
+      return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+    function escAttr(s) { return escHtml(s); }
+
+    // ===============================================================
+    // View: Rencana Kirim (laporan gudang gaya minimarket)
+    // ===============================================================
+    let repData = null;
+    let repLoaded = false;
+    const STATUS_LABEL = {
+      habis: 'HABIS', kritis: 'KRITIS', menipis: 'MENIPIS', aman: 'AMAN',
+      overstock: 'OVERSTOK', mati: 'BARANG MATI',
+    };
+    const KELAS_LABEL = { fast: 'Cepat', medium: 'Sedang', slow: 'Lambat', mati: 'Mati' };
+    function num(n, d = 0) { return Number(n || 0).toLocaleString('id-ID', { maximumFractionDigits: d }); }
+
+    async function loadStockReport() {
+      const wrap = document.getElementById('rkWrap');
+      wrap.innerHTML = '<p style="font-size:12px;color:var(--text-muted)">Menghitung…</p>';
+      try {
+        repData = await Api.getStockReport({
+          days: document.getElementById('rkDays').value,
+          lead: document.getElementById('rkLead').value,
+          cover: document.getElementById('rkCover').value,
+        });
+        repLoaded = true;
+        renderStockReport();
+      } catch (err) {
+        wrap.innerHTML = `<p class="error-text" style="display:block">${escHtml(err.message)}</p>`;
+      }
+    }
+
+    function renderStockReport() {
+      if (!repData) return;
+      const d = repData;
+      const s = d.summary;
+      const needOnly = document.getElementById('rkNeedOnly').checked;
+      const rows = d.rows.filter((r) => !needOnly || r.suggested_order > 0);
+
+      const cards = [
+        ['Perlu dikirim', num(s.need_order) + ' produk', s.need_order ? 'warn' : ''],
+        ['Stok habis', num(s.out_of_stock), s.out_of_stock ? 'bad' : ''],
+        ['Kritis (habis sblm kiriman tiba)', num(s.critical), s.critical ? 'bad' : ''],
+        ['Barang mati (tanpa penjualan)', num(s.dead_stock), ''],
+        ['Nilai rekomendasi order', 'Rp' + num(s.suggested_value_total), ''],
+      ].map(([k, v, cls]) => `<div class="rk-card"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`).join('');
+
+      const tbody = rows.map((r) => {
+        const cover = r.cover_days == null ? '∞' : num(r.cover_days, 1);
+        return `<tr class="${r.suggested_order > 0 ? 'rk-need' : ''}">
+          <td>${escHtml(r.product_name)}${r.managed ? '' : ' <span class="kelas">(blm dikelola)</span>'}</td>
+          <td>${escHtml(r.category)}</td>
+          <td class="num">${num(r.sold_qty)}</td>
+          <td class="num">${num(r.avg_per_day, 2)}</td>
+          <td class="num"><b>${num(r.qty_on_hand)}</b>${r.unit ? ' ' + escHtml(r.unit) : ''}</td>
+          <td class="num">${cover}</td>
+          <td class="num">${num(r.min_stock)}</td>
+          <td class="num"><b>${r.suggested_order > 0 ? num(r.suggested_order) : '—'}</b></td>
+          <td><span class="stk-pill st-${r.status}">${STATUS_LABEL[r.status] || r.status}</span></td>
+          <td><span class="kelas ${r.movement_class}">${KELAS_LABEL[r.movement_class] || ''}</span></td>
+        </tr>`;
+      }).join('');
+
+      document.getElementById('rkWrap').innerHTML = `
+        <div class="rk-cards">${cards}</div>
+        <p style="font-size:11.5px;color:var(--text-muted);margin:0 0 10px">
+          Periode ${d.window_days} hari (sejak ${escHtml(String(d.since).slice(0, 10))}) ·
+          rata-rata/hari = terjual ÷ ${d.window_days} · cover = sisa ÷ rata-rata/hari ·
+          saran kirim = (lead ${d.lead_days}h + target ${d.cover_target_days}h) × rata-rata/hari − sisa.
+        </p>
+        <div style="overflow-x:auto">
+          <table class="summary-table">
+            <thead><tr>
+              <th>Produk</th><th>Kategori</th><th class="num">Terjual</th><th class="num">/hari</th>
+              <th class="num">Sisa</th><th class="num">Cover (hr)</th><th class="num">Min</th>
+              <th class="num">Saran Kirim</th><th>Status</th><th>Kelas</th>
+            </tr></thead>
+            <tbody>${tbody || `<tr><td colspan="10" style="color:var(--text-muted);padding:16px 4px">Tidak ada baris.</td></tr>`}</tbody>
+          </table>
+        </div>`;
+    }
+
+    function downloadRkCsv() {
+      if (!repData) { showToast('Hitung laporan dulu.', 'error'); return; }
+      const cols = ['produk', 'kategori', 'terjual', 'per_hari', 'sisa', 'cover_hari', 'min', 'saran_kirim', 'satuan', 'status', 'kelas'];
+      const cell = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      const lines = [cols.map(cell).join(',')];
+      for (const r of repData.rows) {
+        lines.push([
+          r.product_name, r.category, r.sold_qty, r.avg_per_day, r.qty_on_hand,
+          r.cover_days == null ? '' : r.cover_days, r.min_stock, r.suggested_order,
+          r.unit, r.status, r.movement_class,
+        ].map(cell).join(','));
+      }
+      const blob = new Blob([lines.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `rencana-kirim_${new Date().toISOString().slice(0, 10)}.csv`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+
+    // ===============================================================
+    // View: Barang Terjual (laporan detail penjualan per periode bebas)
+    // ===============================================================
+    let tjData = null;
+    let tjLoaded = false;
+
+    function defaultTjDates() {
+      const to = new Date();
+      const from = new Date(to.getTime() - 6 * 86400000);
+      const iso = (d) => d.toISOString().slice(0, 10);
+      document.getElementById('tjFrom').value = iso(from);
+      document.getElementById('tjTo').value = iso(to);
+    }
+
+    async function loadSalesDetail() {
+      const wrap = document.getElementById('tjWrap');
+      wrap.innerHTML = '<p style="font-size:12px;color:var(--text-muted)">Memuat…</p>';
+      try {
+        tjData = await Api.getSalesDetail({
+          from: document.getElementById('tjFrom').value,
+          to: document.getElementById('tjTo').value,
+          category: document.getElementById('tjCategory').value,
+          sort: document.getElementById('tjSort').value,
+        });
+        tjLoaded = true;
+        // isi dropdown kategori dari server (daftar lengkap kategori aktif,
+        // tidak berubah walau sedang difilter) - hanya sekali biar pilihan
+        // yang sedang aktif tidak hilang.
+        const catSel = document.getElementById('tjCategory');
+        if (catSel.options.length <= 1) {
+          catSel.innerHTML = '<option value="">Semua kategori</option>' +
+            tjData.categories.map((c) => `<option value="${escAttr(c)}">${escHtml(c)}</option>`).join('');
+          catSel.value = tjData.category || '';
+        }
+        renderSalesDetail();
+      } catch (err) {
+        wrap.innerHTML = `<p class="error-text" style="display:block">${escHtml(err.message)}</p>`;
+      }
+    }
+
+    function renderSalesDetail() {
+      if (!tjData) return;
+      const d = tjData;
+      const s = d.summary;
+      const cards = [
+        ['Total terjual', num(s.total_sold_qty) + ' pcs', ''],
+        ['Produk ada penjualan', num(s.products_with_sales), ''],
+        ['Produk tanpa penjualan', num(s.products_no_sales), ''],
+        ['Estimasi omzet', 'Rp' + num(s.total_revenue_est), ''],
+      ].map(([k, v, cls]) => `<div class="rk-card"><div class="k">${k}</div><div class="v ${cls}">${v}</div></div>`).join('');
+
+      const tbody = d.rows.map((r) => `
+        <tr>
+          <td>${escHtml(r.product_name)}</td>
+          <td>${escHtml(r.category)}</td>
+          <td class="num"><b>${num(r.sold_qty)}</b>${r.unit ? ' ' + escHtml(r.unit) : ''}</td>
+          <td class="num">${num(r.tx_count)}</td>
+          <td class="num">${num(r.qty_on_hand)}</td>
+          <td class="num">Rp${num(r.revenue_est)}</td>
+        </tr>`).join('');
+
+      document.getElementById('tjWrap').innerHTML = `
+        <div class="rk-cards">${cards}</div>
+        <p style="font-size:11.5px;color:var(--text-muted);margin:0 0 10px">
+          Periode ${escHtml(d.from)} s/d ${escHtml(d.to)}${d.category ? ' · kategori ' + escHtml(d.category) : ''} ·
+          "Sisa stok" adalah stok sistem SAAT INI (bukan pada akhir periode) - ini yang jadi acuan
+          kalau opname disubmit sekarang.
+        </p>
+        <div style="overflow-x:auto">
+          <table class="summary-table">
+            <thead><tr>
+              <th>Produk</th><th>Kategori</th><th class="num">Terjual</th>
+              <th class="num">Jml Transaksi</th><th class="num">Sisa Stok</th><th class="num">Est. Omzet</th>
+            </tr></thead>
+            <tbody>${tbody || `<tr><td colspan="6" style="color:var(--text-muted);padding:16px 4px">Tidak ada baris.</td></tr>`}</tbody>
+          </table>
+        </div>`;
+    }
+
+    function downloadTjCsv() {
+      if (!tjData) { showToast('Tampilkan laporan dulu.', 'error'); return; }
+      const cols = ['produk', 'kategori', 'terjual', 'jml_transaksi', 'sisa_stok', 'satuan', 'estimasi_omzet'];
+      const cell = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+      const lines = [cols.map(cell).join(',')];
+      for (const r of tjData.rows) {
+        lines.push([r.product_name, r.category, r.sold_qty, r.tx_count, r.qty_on_hand, r.unit, r.revenue_est].map(cell).join(','));
+      }
+      const blob = new Blob([lines.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `barang-terjual_${tjData.from}_${tjData.to}.csv`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+    }
+
+    // ===============================================================
+    // View: Stock Opname (submit stokis -> apply admin/supervisor)
+    // ===============================================================
+    let opFilterTerm = '';
+    let opStatus = 'applied';
+
+    function renderOpnameForm() {
+      const wrap = document.getElementById('opSubmitCard');
+      if (!canSubmitOpname) { wrap.style.display = 'none'; return; }
+      const term = opFilterTerm.toLowerCase();
+      const cat = document.getElementById('opCategory').value;
+      const rows = allItems.filter((it) => {
+        if (cat && it.category !== cat) return false;
+        return !term || (it.product_name || '').toLowerCase().includes(term);
+      });
+      const body = document.getElementById('opBody');
+      body.innerHTML = rows.length
+        ? rows.map((it) => `
+          <tr data-row-id="${it.product_id}">
+            <td>${escHtml(it.product_name)}</td>
+            <td class="num">${it.qty_on_hand}</td>
+            <td class="num"><input type="number" class="field op-fisik" min="0" data-sys="${it.qty_on_hand}" data-product="${it.product_id}" /></td>
+            <td class="num"><span class="op-delta zero" data-delta-for="${it.product_id}">—</span></td>
+          </tr>`).join('')
+        : '<tr><td colspan="4" style="color:var(--text-muted);padding:16px 4px">Tidak ada produk yang cocok.</td></tr>';
+
+      body.querySelectorAll('.op-fisik').forEach((input) => {
+        input.addEventListener('input', () => {
+          const pid = input.dataset.product;
+          const sys = Number(input.dataset.sys);
+          const deltaEl = body.querySelector(`[data-delta-for="${pid}"]`);
+          if (input.value === '') { deltaEl.textContent = '—'; deltaEl.className = 'op-delta zero'; return; }
+          const phys = Number(input.value);
+          const d = phys - sys;
+          deltaEl.textContent = (d > 0 ? '+' : '') + d;
+          deltaEl.className = 'op-delta ' + (d === 0 ? 'zero' : d > 0 ? 'plus' : 'minus');
+        });
+      });
+    }
+
+    async function submitOpname() {
+      const errEl = document.getElementById('opErr');
+      errEl.style.display = 'none';
+      const items = [];
+      document.querySelectorAll('#opBody .op-fisik').forEach((input) => {
+        if (input.value === '') return;
+        items.push({ product_id: input.dataset.product, qty_physical: Number(input.value) });
+      });
+      if (!items.length) {
+        errEl.textContent = 'Isi minimal 1 produk dengan stok fisik hasil hitung.';
+        errEl.style.display = 'block';
+        return;
+      }
+      const btn = document.getElementById('opSubmit');
+      btn.disabled = true;
+      try {
+        const note = document.getElementById('opNote').value.trim();
+        const res = await Api.submitOpname({ note, items });
+        const negatives = (res.items || []).filter((r) => Number(r.qty_after) < 0).length;
+        if (res.emailed) {
+          showToast(`Stok opname (${items.length} produk) diterapkan. Laporan terkirim ke email gudang.` + (negatives ? ` ${negatives} produk MINUS.` : ''));
+        } else {
+          showToast(`Stok opname (${items.length} produk) diterapkan, TAPI email laporan gagal: ${res.email_error || '-'}`, 'error');
+        }
+        document.getElementById('opNote').value = '';
+        await load();
+        opStatus = 'applied';
+        setActiveStatusTab();
+        loadOpnameSessions();
+      } catch (err) {
+        errEl.textContent = err.message;
+        errEl.style.display = 'block';
+      } finally {
+        btn.disabled = false;
+      }
+    }
+
+    const OPNAME_STATUS_LABEL = { pending: 'Menunggu', applied: 'Diterapkan', rejected: 'Ditolak' };
+
+    function setActiveStatusTab() {
+      document.querySelectorAll('#opStatusTabs button').forEach((b) => b.classList.toggle('active', b.dataset.status === opStatus));
+    }
+
+    async function loadOpnameSessions() {
+      const body = document.getElementById('opSessionsBody');
+      body.innerHTML = '<tr><td colspan="6" style="color:var(--text-muted);padding:16px 4px">Memuat…</td></tr>';
+      try {
+        const { sessions } = await Api.listOpname(opStatus);
+        if (!sessions.length) {
+          body.innerHTML = '<tr><td colspan="6" style="color:var(--text-muted);padding:16px 4px">Belum ada sesi.</td></tr>';
+          return;
+        }
+        body.innerHTML = sessions.map((s) => `
+          <tr data-id="${s.opname_id}">
+            <td>${new Date(s.created_at).toLocaleString('id-ID')}</td>
+            <td>${escHtml(s.created_by_name || '-')}</td>
+            <td class="num">${s.item_count}</td>
+            <td>${escHtml(s.note || s.reject_note || '-')}</td>
+            <td><span class="op-status ${s.status}">${OPNAME_STATUS_LABEL[s.status] || s.status}</span></td>
+            <td>${s.emailed_at ? '<span style="color:var(--green)">✔ terkirim</span>' : (s.email_error ? `<span style="color:var(--red)" title="${escAttr(s.email_error)}">✖ gagal</span>` : '-')}</td>
+          </tr>`).join('');
+        body.querySelectorAll('tr[data-id]').forEach((tr) => {
+          tr.addEventListener('click', () => openOpnameDetail(tr.dataset.id));
+        });
+      } catch (err) {
+        body.innerHTML = `<tr><td colspan="6"><span class="error-text" style="display:block">${escHtml(err.message)}</span></td></tr>`;
+      }
+    }
+
+    async function openOpnameDetail(id) {
+      modalMount.innerHTML = `
+        <div class="modal-overlay">
+          <div class="modal-box card" style="max-width:680px">
+            <h3>Detail Sesi Opname</h3>
+            <div id="opDetWrap"><p class="muted">Memuat…</p></div>
+            <button class="btn btn-outline btn-block" id="opDetClose" style="margin-top:12px">Tutup</button>
+          </div>
+        </div>`;
+      document.getElementById('opDetClose').addEventListener('click', closeModal);
+      try {
+        const det = await Api.getOpname(id);
+        const wrap = document.getElementById('opDetWrap');
+        const rows = det.items.map((it) => {
+          const staleWarn = it.applied_delta == null && Number(it.qty_current) !== Number(it.qty_system_snapshot)
+            ? ' <span style="color:var(--yellow);font-size:10px">(stok sudah berubah sejak submit)</span>' : '';
+          return `<tr>
+            <td>${escHtml(it.product_name || it.product_id)}</td>
+            <td class="num">${it.qty_system_snapshot}</td>
+            <td class="num">${it.qty_current}${staleWarn}</td>
+            <td class="num"><b>${it.qty_physical}</b></td>
+            <td class="num">${it.applied_delta == null ? (it.delta_snapshot > 0 ? '+' : '') + it.delta_snapshot + ' (perkiraan)' : (it.applied_delta > 0 ? '+' : '') + it.applied_delta}</td>
+          </tr>`;
+        }).join('');
+        const canLocalApply = ['admin', 'supervisor'].includes(myRole);
+        const actions = det.status === 'pending'
+          ? `${canLocalApply ? `
+             <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+               <button class="btn btn-primary" id="opDetApply" style="flex:1 1 45%">Terapkan</button>
+               <button class="btn btn-outline" id="opDetReject" style="flex:1 1 45%">Tolak</button>
+             </div>
+             <p class="muted" style="margin-top:6px">Pastikan warehouse sudah setuju (telepon/WA) sebelum menekan Terapkan - qty yang dipakai adalah hitungan stokis di atas.</p>` : ''}
+             <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
+               <button class="btn btn-outline" id="opDetCopy" style="flex:1 1 45%">Salin JSON untuk Holding</button>
+               <button class="btn btn-outline" id="opDetImport" style="flex:1 1 45%">Impor Persetujuan Holding</button>
+             </div>
+             <p class="muted" style="margin-top:6px">Alternatif: kirim JSON di atas ke holding → holding tandatangani di halaman signer → tempel/unggah hasilnya di sini.</p>`
+          : '';
+        wrap.innerHTML = `
+          <p class="muted">${escHtml(det.created_by_name || '-')} · ${new Date(det.created_at).toLocaleString('id-ID')} · <span class="op-status ${det.status}">${OPNAME_STATUS_LABEL[det.status] || det.status}</span></p>
+          ${det.note ? `<p class="muted">Catatan: ${escHtml(det.note)}</p>` : ''}
+          ${det.reject_note ? `<p class="muted">Alasan ditolak: ${escHtml(det.reject_note)}</p>` : ''}
+          <p class="muted">Email laporan: ${det.emailed_at
+            ? `<span style="color:var(--green)">terkirim ke ${escHtml(det.email_to || '-')} (${new Date(det.emailed_at).toLocaleString('id-ID')})</span>`
+            : `<span style="color:var(--red)">gagal - ${escHtml(det.email_error || 'belum terkirim')}</span>`}</p>
+          <div style="overflow-x:auto">
+            <table class="summary-table">
+              <thead><tr><th>Produk</th><th class="num">Sistem (saat submit)</th><th class="num">Sistem (saat ini)</th><th class="num">Fisik</th><th class="num">Selisih</th></tr></thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+          <div id="opDetErr" class="error-text" style="display:none;margin-top:10px"></div>
+          ${actions}`;
+
+        const errEl = document.getElementById('opDetErr');
+
+        const applyBtn = document.getElementById('opDetApply');
+        if (applyBtn) applyBtn.addEventListener('click', async () => {
+          if (!confirm('Terapkan sesi opname ini? Stok akan disesuaikan sesuai hitungan fisik di atas.')) return;
+          applyBtn.disabled = true;
+          try {
+            const res = await Api.applyOpname(id);
+            closeModal();
+            showToast(`Opname DITERAPKAN, ${res.items.length} produk disesuaikan.`);
+            await load();
+            loadOpnameSessions();
+          } catch (err) { errEl.textContent = err.message; errEl.style.display = 'block'; applyBtn.disabled = false; }
+        });
+
+        const rejectBtn = document.getElementById('opDetReject');
+        if (rejectBtn) rejectBtn.addEventListener('click', async () => {
+          const note = prompt('Alasan penolakan (opsional):', '') || '';
+          if (!confirm('Tolak sesi opname ini? Stokis perlu hitung ulang.')) return;
+          rejectBtn.disabled = true;
+          try {
+            await Api.rejectOpname(id, { note });
+            closeModal();
+            showToast('Opname ditolak.');
+            loadOpnameSessions();
+          } catch (err) { errEl.textContent = err.message; errEl.style.display = 'block'; rejectBtn.disabled = false; }
+        });
+
+        const copyBtn = document.getElementById('opDetCopy');
+        if (copyBtn) copyBtn.addEventListener('click', async () => {
+          try {
+            const j = await Api.getOpnameSignerJson(id);
+            await navigator.clipboard.writeText(JSON.stringify(j, null, 2));
+            copyBtn.textContent = 'Tersalin ✔ — kirim ke holding';
+            setTimeout(() => (copyBtn.textContent = 'Salin JSON untuk Holding'), 2000);
+          } catch (err) { errEl.textContent = err.message; errEl.style.display = 'block'; }
+        });
+
+        const importBtn = document.getElementById('opDetImport');
+        if (importBtn) importBtn.addEventListener('click', () => openImportApprovalModal(id));
+      } catch (err) {
+        document.getElementById('opDetWrap').innerHTML = `<p class="error-text" style="margin:0">${escHtml(err.message)}</p>`;
+      }
+    }
+
+    // Modal impor blob persetujuan holding (tempel teks / unggah file).
+    function openImportApprovalModal(id) {
+      const ov = document.createElement('div');
+      ov.className = 'modal-overlay';
+      ov.style.zIndex = '1200';
+      ov.innerHTML = `
+        <div class="modal-box card" style="max-width:560px">
+          <h3>Impor Persetujuan Holding</h3>
+          <p class="muted">Tempel blob dari holding (WA/email) atau unggah file <code>.json</code>-nya. Sistem verifikasi tanda tangan lalu menerapkan / menolak sesi ini.</p>
+          <textarea class="field" id="impBlob" placeholder='{"alg":"ES256","signed":"...","sig":"..."}' style="min-height:120px;font-family:Consolas,monospace;font-size:12px"></textarea>
+          <input type="file" id="impFile" accept=".json,application/json" style="margin:6px 0" />
+          <div id="impErr" class="error-text" style="display:none"></div>
+          <div style="display:flex;gap:8px;margin-top:10px">
+            <button class="btn btn-primary" id="impDo" style="flex:1">Verifikasi &amp; Terapkan</button>
+            <button class="btn btn-outline" id="impCancel" style="flex:1">Batal</button>
+          </div>
+        </div>`;
+      document.body.appendChild(ov);
+      const close = () => ov.remove();
+      ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+      ov.querySelector('#impCancel').addEventListener('click', close);
+      ov.querySelector('#impFile').addEventListener('change', (e) => {
+        const f = e.target.files[0];
+        if (!f) return;
+        const r = new FileReader();
+        r.onload = () => { ov.querySelector('#impBlob').value = r.result; };
+        r.readAsText(f);
+      });
+      ov.querySelector('#impDo').addEventListener('click', async () => {
+        const err = ov.querySelector('#impErr'); err.style.display = 'none';
+        const raw = ov.querySelector('#impBlob').value.trim();
+        if (!raw) { err.textContent = 'Tempel blob atau pilih file dulu.'; err.style.display = 'block'; return; }
+        const btn = ov.querySelector('#impDo'); btn.disabled = true;
+        try {
+          let blob; try { blob = JSON.parse(raw); } catch (e) { blob = raw; } // kirim object kalau bisa, string kalau tidak
+          const res = await Api.importOpnameApproval(id, blob);
+          close();
+          closeModal();
+          if (res.decision === 'rejected') {
+            showToast(`Opname DITOLAK oleh holding (${res.approved_by_holding || '-'}).`, 'error');
+          } else {
+            showToast(`Opname DITERAPKAN — disetujui holding (${res.approved_by_holding || '-'}), ${res.items.length} produk.`);
+            await load();
+          }
+          loadOpnameSessions();
+        } catch (e) {
+          err.textContent = e.message; err.style.display = 'block'; btn.disabled = false;
+        }
+      });
+    }
+
+    // Lembar cetak Hitung Fisik: kertas kosong (blank Stok Fisik/Catatan) buat
+    // stokis bawa ke gudang, dihitung manual dulu di kertas, baru diketik balik
+    // ke form digital di atas. Mengikuti filter pencarian/kategori yang aktif
+    // sekarang - kosongkan filter utk cetak semua produk sekaligus.
+    function printOpnameSheet() {
+      const term = opFilterTerm.toLowerCase();
+      const cat = document.getElementById('opCategory').value;
+      const rows = allItems
+        .filter((it) => {
+          if (cat && it.category !== cat) return false;
+          return !term || (it.product_name || '').toLowerCase().includes(term);
+        })
+        .sort((a, b) => (a.category || '').localeCompare(b.category || '') || a.product_name.localeCompare(b.product_name));
+      if (!rows.length) { showToast('Tidak ada produk yang cocok filter untuk dicetak.', 'error'); return; }
+
+      const title = cat ? `Lembar Hitung Fisik — ${cat}` : 'Lembar Hitung Fisik — Semua Kategori';
+      const win = window.open('', '_blank');
+      if (!win) { showToast('Pop-up diblokir browser - izinkan pop-up utk mencetak.', 'error'); return; }
+      const tanggal = new Date().toLocaleDateString('id-ID', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+      win.document.write(`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>${escHtml(title)}</title><style>
+        body{font-family:Arial,Helvetica,sans-serif;padding:28px;color:#111}
+        h1{font-size:18px;margin:0 0 2px}
+        .meta{font-size:12px;color:#555;margin-bottom:18px}
+        table{width:100%;border-collapse:collapse;font-size:12px}
+        th,td{border:1px solid #999;padding:7px 8px;text-align:left}
+        th{background:#eee;text-transform:uppercase;font-size:10px;letter-spacing:.03em}
+        td.num,th.num{text-align:right}
+        td.blank{min-width:80px}
+        .sig{margin-top:46px;display:flex;justify-content:space-between}
+        .sig div{width:220px;text-align:center;font-size:12px}
+        .sig .line{margin-top:46px;border-top:1px solid #333;padding-top:4px}
+        @media print{ body{padding:0} }
+      </style></head><body>
+        <h1>${escHtml(title)}</h1>
+        <div class="meta">${escHtml(tanggal)} &middot; ${rows.length} produk &middot; kolom "Stok Sistem" hanya acuan, isi "Stok Fisik" dari hitungan langsung di lapangan</div>
+        <table>
+          <thead><tr>
+            <th style="width:30px">No</th><th>Produk</th><th>Kategori</th><th class="num">Stok Sistem</th>
+            <th class="num blank">Stok Fisik</th><th>Catatan</th>
+          </tr></thead>
+          <tbody>${rows.map((it, i) => `<tr>
+            <td>${i + 1}</td><td>${escHtml(it.product_name)}</td><td>${escHtml(it.category || '-')}</td>
+            <td class="num">${it.qty_on_hand}${it.unit ? ' ' + escHtml(it.unit) : ''}</td>
+            <td class="blank"></td><td></td>
+          </tr>`).join('')}</tbody>
+        </table>
+        <div class="sig">
+          <div>Dihitung oleh<div class="line">Nama &amp; tanda tangan</div></div>
+          <div>Diperiksa oleh<div class="line">Nama &amp; tanda tangan</div></div>
+        </div>
+      </body></html>`);
+      win.document.close();
+      win.focus();
+      win.print();
+    }
+
+    document.getElementById('opFilter').addEventListener('input', (e) => { opFilterTerm = e.target.value; renderOpnameForm(); });
+    document.getElementById('opCategory').addEventListener('change', renderOpnameForm);
+    document.getElementById('opPrintSheet').addEventListener('click', printOpnameSheet);
+    document.getElementById('opSubmit').addEventListener('click', submitOpname);
+    document.getElementById('opStatusTabs').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-status]');
+      if (!b) return;
+      opStatus = b.dataset.status;
+      setActiveStatusTab();
+      loadOpnameSessions();
+    });
+    let opnameLoaded = false;
+
+    // ===============================================================
+    // Toggle view + init
+    // ===============================================================
+    let invView = ['terjual', 'kirim', 'opname'].includes(localStorage.getItem('grpos-inventory-view'))
+      ? localStorage.getItem('grpos-inventory-view') : 'stok';
+    if (!canSeeSalesReports && ['terjual', 'kirim'].includes(invView)) invView = 'stok';
+    function applyInvView() {
+      document.getElementById('viewStok').style.display = invView === 'stok' ? '' : 'none';
+      document.getElementById('viewTerjual').style.display = invView === 'terjual' ? '' : 'none';
+      document.getElementById('viewKirim').style.display = invView === 'kirim' ? '' : 'none';
+      document.getElementById('viewOpname').style.display = invView === 'opname' ? '' : 'none';
+      document.querySelectorAll('#invViewToggle button').forEach((b) =>
+        b.classList.toggle('active', b.dataset.view === invView));
+      if (invView === 'terjual' && !tjLoaded) { defaultTjDates(); loadSalesDetail(); }
+      if (invView === 'kirim' && !repLoaded) loadStockReport();
+      if (invView === 'opname' && !opnameLoaded) { opnameLoaded = true; setActiveStatusTab(); loadOpnameSessions(); }
+    }
+    document.getElementById('invViewToggle').addEventListener('click', (e) => {
+      const b = e.target.closest('button[data-view]');
+      if (!b || b.dataset.view === invView) return;
+      invView = b.dataset.view;
+      localStorage.setItem('grpos-inventory-view', invView);
+      applyInvView();
+    });
+    document.getElementById('rkShow').addEventListener('click', loadStockReport);
+    document.getElementById('rkDays').addEventListener('change', loadStockReport);
+    document.getElementById('rkNeedOnly').addEventListener('change', renderStockReport);
+    document.getElementById('rkCsv').addEventListener('click', downloadRkCsv);
+    document.getElementById('tjShow').addEventListener('click', loadSalesDetail);
+    document.getElementById('tjCsv').addEventListener('click', downloadTjCsv);
+
+    load();
+    applyInvView();
+  </script>
+</body>
+</html>
