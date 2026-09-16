@@ -72,6 +72,49 @@ Butuh **Node.js 18+** dan **MySQL/MariaDB** terpasang di komputer server itu.
 node -v
 ```
 
+Kalau belum ada, download dari https://nodejs.org (pilih versi LTS).
+
+### Install MariaDB (kalau belum ada MySQL/MariaDB di komputer server)
+
+**Windows** (cara tercepat, lewat winget):
+
+```
+winget install MariaDB.Server
+```
+
+Cek jalan dengan (sesuaikan path versi hasil install):
+
+```
+"C:\Program Files\MariaDB <versi>\bin\mysql.exe" -u root -e "SELECT 1"
+```
+
+**Penting - dua gotcha yang sering kejadian di instalasi baru:**
+
+- Installer silent winget **tidak selalu otomatis mendaftarkan Windows
+  Service** - kalau `mysql -u root` di atas gagal connect, daftarkan manual
+  lewat PowerShell **as Administrator**:
+  ```
+  "C:\Program Files\MariaDB <versi>\bin\mysqld.exe" --install MariaDB --datadir="C:\Program Files\MariaDB <versi>\data"
+  net start MariaDB
+  ```
+  (atau jalankan manual tanpa service: `mariadbd.exe --datadir="...\data" --console`,
+  tapi ini mati kalau komputer restart - service lebih baik untuk produksi).
+- User `root` bawaan **tidak punya password**. Untuk produksi, set password
+  root lalu isi `DB_PASSWORD` di `.env` (jangan biarkan kosong):
+  ```
+  "C:\Program Files\MariaDB <versi>\bin\mysqladmin.exe" -u root password "PasswordKuatAnda"
+  ```
+
+**Linux** (Ubuntu/Debian): `sudo apt install mariadb-server` lalu
+`sudo mysql_secure_installation` untuk set password root.
+
+Setelah MariaDB jalan, buat database kosong untuk unit ini (sesuaikan nama
+dengan `DB_NAME` yang akan diisi di `.env` langkah berikutnya):
+
+```
+mysql -u root -p -e "CREATE DATABASE nama_database_unit CHARACTER SET utf8mb4"
+```
+
 ## 2. Install
 
 Salin folder `gr-pos` ini ke komputer server, lalu di dalam foldernya:
