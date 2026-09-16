@@ -12,7 +12,8 @@
  *   node server/utils/createAdmin.js admin RahasiaKuat123 "Admin Utama" admin
  *   node server/utils/createAdmin.js kasir1 Kasir123 "Budi Kasir" kasir
  *
- * role default: admin. Pilihan role: admin, supervisor, kasir, dapur, waiter, gudang.
+ * role default: admin. Pilihan role: admin, head_karaoke, head_unit,
+ * supervisor, kasir, dapur, waiter, gudang.
  */
 require('dotenv').config({ override: true }); // .env project menang atas env sistem - lihat catatan di server.js
 const bcrypt = require('bcryptjs');
@@ -26,7 +27,7 @@ async function main() {
     process.exit(1);
   }
 
-  const validRoles = ['admin', 'supervisor', 'kasir', 'dapur', 'waiter', 'gudang'];
+  const validRoles = ['admin', 'head_karaoke', 'head_unit', 'supervisor', 'kasir', 'dapur', 'waiter', 'gudang'];
   if (!validRoles.includes(role)) {
     console.error(`Role tidak valid. Pilihan: ${validRoles.join(', ')}`);
     process.exit(1);

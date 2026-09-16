@@ -23,7 +23,7 @@ const { AppError } = require('../middleware/errorHandler');
 const router = express.Router();
 router.use(requireAuth);
 
-const MANAGE = ['admin', 'supervisor'];
+const MANAGE = ['admin', 'head_karaoke', 'head_unit', 'supervisor'];
 
 // Normalisasi & validasi payload form. `partial` = untuk PUT (semua wajib
 // tetap wajib di sini; kita selalu kirim form lengkap dari klien).

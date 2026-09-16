@@ -57,7 +57,7 @@
   <script>
     renderLayout({ active: 'laporan-void', title: 'Laporan Void', subtitle: 'Item dibatalkan, per kasir' });
 
-    const allowed = ['admin', 'supervisor'].includes((getUser() || {}).role);
+    const allowed = ['admin', 'head_karaoke', 'head_unit', 'supervisor'].includes((getUser() || {}).role);
     if (!allowed) {
       document.getElementById('vrGate').style.display = 'block';
     } else {

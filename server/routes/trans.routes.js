@@ -53,7 +53,7 @@ router.use(requireAuth);
 //     oleh worker testMode setelah TEST_MODE_MINUTES (services/testMode.service.js)
 // Boleh dipakai kasir & waiter (tanpa otorisasi SPV) - merekalah yang keliling
 // cek room tiap sebelum buka.
-const TEST_MODE_ROLES = ['kasir', 'waiter', 'supervisor', 'admin'];
+const TEST_MODE_ROLES = ['kasir', 'waiter', 'supervisor', 'head_unit', 'head_karaoke', 'admin'];
 
 // =====================================================================
 // COMP ROOM - VIP / VVIP (31 Agustus 2026) - lihat migration 010_comp_room.sql.
@@ -607,7 +607,7 @@ router.post('/buka-kamar', async (req, res, next) => {
 // web_tr_trans_details.subtotal - void cukup mengurangi qty/subtotal baris
 // (atau menghapus baris bila qty habis). web_tr_trans_void = jejak audit.
 // =====================================================================
-const VOID_APPROVER_ROLES = ['supervisor', 'admin']; // dipakai juga oleh gate comp/VIP
+const VOID_APPROVER_ROLES = ['supervisor', 'head_unit', 'head_karaoke', 'admin']; // dipakai juga oleh gate comp/VIP
 
 /**
  * Aktor void = user yang sedang login, WAJIB admin. Tidak ada verifikasi
@@ -1290,7 +1290,7 @@ router.post('/:id/tutup-kamar', async (req, res, next) => {
 // =====================================================================
 // POST /api/trans/:id/batal - khusus admin/supervisor
 // =====================================================================
-router.post('/:id/batal', requireRole('admin', 'supervisor'), async (req, res, next) => {
+router.post('/:id/batal', requireRole('admin', 'head_karaoke', 'head_unit', 'supervisor'), async (req, res, next) => {
   try {
     const transId = req.params.id;
     const result = await withTransaction(async (conn) => {

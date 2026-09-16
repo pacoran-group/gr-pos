@@ -44,7 +44,7 @@
 
     // Kartu Sinkron Master Data - hanya admin/supervisor.
     const u = getUser() || {};
-    if (['admin', 'supervisor'].includes(u.role)) {
+    if (['admin', 'head_karaoke', 'head_unit', 'supervisor'].includes(u.role)) {
       document.getElementById('syncCard').style.display = 'block';
       const fmtLast = (r) => {
         if (!r) return 'Belum pernah sinkron di sesi server ini.';

@@ -226,17 +226,17 @@
     });
 
     const myRole = (getUser() || {}).role;
-    const canEdit = ['admin', 'supervisor', 'gudang'].includes(myRole);
+    const canEdit = ['admin', 'head_karaoke', 'head_unit', 'supervisor', 'gudang'].includes(myRole);
     // "Sesuaikan" bebas (set stok langsung tanpa opname) dikunci admin/supervisor
     // sejak migration 014 - stokis ('gudang') pakai alur Stock Opname (tab
     // terpisah) yang hasilnya baru diterapkan admin/supervisor.
-    const canAdjustFree = ['admin', 'supervisor'].includes(myRole);
-    const canSubmitOpname = ['admin', 'supervisor', 'gudang'].includes(myRole);
-    const canApplyOpname = ['admin', 'supervisor'].includes(myRole);
+    const canAdjustFree = ['admin', 'head_karaoke', 'head_unit', 'supervisor'].includes(myRole);
+    const canSubmitOpname = ['admin', 'head_karaoke', 'head_unit', 'supervisor', 'gudang'].includes(myRole);
+    const canApplyOpname = ['admin', 'head_karaoke', 'head_unit', 'supervisor'].includes(myRole);
     // Laporan "Barang Terjual" & "Rencana Kirim" berisi omzet/nilai order -
     // stokis (gudang) cuma boleh Barang Masuk (di tab Stok & Input), Riwayat,
     // dan Stock Opname. Server juga menegakkan ini (403) - ini cuma sembunyikan UI.
-    const canSeeSalesReports = ['admin', 'supervisor'].includes(myRole);
+    const canSeeSalesReports = ['admin', 'head_karaoke', 'head_unit', 'supervisor'].includes(myRole);
     if (!canSeeSalesReports) {
       document.querySelectorAll('#invViewToggle button[data-view="terjual"], #invViewToggle button[data-view="kirim"]')
         .forEach((b) => (b.style.display = 'none'));
@@ -788,7 +788,7 @@
             <td class="num">${it.applied_delta == null ? (it.delta_snapshot > 0 ? '+' : '') + it.delta_snapshot + ' (perkiraan)' : (it.applied_delta > 0 ? '+' : '') + it.applied_delta}</td>
           </tr>`;
         }).join('');
-        const canLocalApply = ['admin', 'supervisor'].includes(myRole);
+        const canLocalApply = ['admin', 'head_karaoke', 'head_unit', 'supervisor'].includes(myRole);
         const actions = det.status === 'pending'
           ? `${canLocalApply ? `
              <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">

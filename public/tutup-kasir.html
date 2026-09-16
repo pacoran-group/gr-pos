@@ -40,7 +40,7 @@
   <script>
     renderLayout({ active: 'kasir', title: 'Tutup Kasir', subtitle: 'Shift & rekonsiliasi kas' });
     const me = getUser() || {};
-    const isMgr = ['admin', 'supervisor'].includes(me.role);
+    const isMgr = ['admin', 'head_karaoke', 'head_unit', 'supervisor'].includes(me.role);
     function rp(n) { return 'Rp' + Number(n || 0).toLocaleString('id-ID'); }
     function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
 

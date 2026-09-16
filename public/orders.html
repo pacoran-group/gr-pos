@@ -163,14 +163,15 @@
 
         // Tombol aksi buka kamar - dibedakan per peran:
         //  - Test Room  : satu klik, buka 15 menit tanpa input. kasir/waiter/
-        //                 supervisor/admin (TEST_MODE_ROLES di trans.routes.js).
-        //  - Buka VIP   : hanya admin. Popup jumlah jam, tanpa password lagi
-        //                 (admin sudah login - server verifikasi peran sesi).
+        //                 supervisor/head_unit/head_karaoke/admin (TEST_MODE_ROLES
+        //                 di trans.routes.js).
+        //  - Buka VIP   : hanya admin/head_karaoke. Popup jumlah jam, tanpa
+        //                 password lagi (sudah login - server verifikasi peran sesi).
         const currentUser = getUser();
-        if (currentUser && ['admin', 'supervisor', 'kasir', 'waiter'].includes(currentUser.role)) {
+        if (currentUser && ['admin', 'head_karaoke', 'head_unit', 'supervisor', 'kasir', 'waiter'].includes(currentUser.role)) {
           document.getElementById('btnTestRoom').style.display = 'block';
         }
-        if (currentUser && currentUser.role === 'admin') {
+        if (currentUser && ['admin', 'head_karaoke'].includes(currentUser.role)) {
           document.getElementById('btnVip').style.display = 'block';
         }
 

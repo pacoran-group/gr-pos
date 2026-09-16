@@ -21,7 +21,7 @@ const mailer = require('../services/mailer.service');
 const router = express.Router();
 router.use(requireAuth);
 
-const ADMIN = ['admin', 'supervisor'];
+const ADMIN = ['admin', 'head_karaoke', 'head_unit', 'supervisor'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function resolveDate(v) {

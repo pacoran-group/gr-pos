@@ -16,7 +16,7 @@ const promoSvc = require('../services/promo.service');
 
 const router = express.Router();
 router.use(requireAuth);
-const MANAGE = ['admin', 'supervisor'];
+const MANAGE = ['admin', 'head_karaoke', 'head_unit', 'supervisor'];
 
 const TIME_RE = /^([01]\d|2[0-3]):[0-5]\d$/;
 

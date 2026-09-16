@@ -167,7 +167,8 @@ router.delete('/:id/soft-lock', async (req, res, next) => {
 });
 
 // POST /api/rooms/:id/maintenance - set kamar rusak/maintenance
-router.post('/:id/maintenance', requireRole('admin', 'supervisor'), async (req, res, next) => {
+// head_unit SENGAJA tidak dimasukkan - aksi ini disembunyikan dari role itu.
+router.post('/:id/maintenance', requireRole('admin', 'head_karaoke', 'supervisor'), async (req, res, next) => {
   try {
     const roomId = Number(req.params.id);
     const { reason } = req.body;
@@ -194,7 +195,8 @@ router.post('/:id/maintenance', requireRole('admin', 'supervisor'), async (req, 
 });
 
 // DELETE /api/rooms/:id/maintenance - kamar sudah selesai diperbaiki
-router.delete('/:id/maintenance', requireRole('admin', 'supervisor'), async (req, res, next) => {
+// head_unit SENGAJA tidak dimasukkan - aksi ini disembunyikan dari role itu.
+router.delete('/:id/maintenance', requireRole('admin', 'head_karaoke', 'supervisor'), async (req, res, next) => {
   try {
     const roomId = Number(req.params.id);
     await pool.query(
@@ -211,7 +213,7 @@ router.delete('/:id/maintenance', requireRole('admin', 'supervisor'), async (req
 // SECARA MANUAL (khusus admin/supervisor). Menggantikan UPDATE m_room manual
 // lewat Navicat ke server lama: perintah diantre ke web_room_player_outbox
 // lalu dikirim worker ke 154. Lihat services/roomPlayer.service.js.
-router.post('/:id/player', requireRole('admin', 'supervisor'), async (req, res, next) => {
+router.post('/:id/player', requireRole('admin', 'head_karaoke', 'head_unit', 'supervisor'), async (req, res, next) => {
   try {
     const roomId = Number(req.params.id);
     const state = String(req.body.state || '').toLowerCase();

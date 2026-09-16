@@ -22,8 +22,8 @@ const { HOTEL_UNIT_ID, HOTEL_FNB_RECIPIENTS, HOTEL_FNB_CC, hotelFnbMailConfigure
 const router = express.Router();
 router.use(requireAuth);
 
-const ORDER_ROLES = ['kasir', 'admin', 'supervisor'];
-const ADMIN = ['admin', 'supervisor'];
+const ORDER_ROLES = ['kasir', 'admin', 'head_karaoke', 'head_unit', 'supervisor'];
+const ADMIN = ['admin', 'head_karaoke', 'head_unit', 'supervisor'];
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
 function resolveDate(v) {

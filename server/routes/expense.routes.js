@@ -21,7 +21,7 @@ const { UNIT_ID, UNIT_NAME, SYNC_OUTBOX_ENABLED } = require('../config/unit');
 
 const router = express.Router();
 router.use(requireAuth);
-const MANAGE = ['admin', 'supervisor'];
+const MANAGE = ['admin', 'head_karaoke', 'head_unit', 'supervisor'];
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 

@@ -25,19 +25,19 @@ const mailer = require('../services/mailer.service');
 const router = express.Router();
 router.use(requireAuth);
 
-const STOCK_EDIT_ROLES = ['admin', 'supervisor', 'gudang'];
+const STOCK_EDIT_ROLES = ['admin', 'head_karaoke', 'head_unit', 'supervisor', 'gudang'];
 // "Sesuaikan" bebas (set stok ke angka apa pun tanpa lewat opname) - sejak
 // migration 014 ini dikunci admin/supervisor saja (revisi SPV Gudang:
 // stokis unit cuma submit hasil opname, TIDAK berhak eksekusi penyesuaian
 // sendiri - lihat catatan panjang di 014_stock_opname.sql).
-const STOCK_ADJUST_ROLES = ['admin', 'supervisor'];
-const OPNAME_SUBMIT_ROLES = ['admin', 'supervisor', 'gudang'];
-const OPNAME_APPLY_ROLES = ['admin', 'supervisor'];
+const STOCK_ADJUST_ROLES = ['admin', 'head_karaoke', 'head_unit', 'supervisor'];
+const OPNAME_SUBMIT_ROLES = ['admin', 'head_karaoke', 'head_unit', 'supervisor', 'gudang'];
+const OPNAME_APPLY_ROLES = ['admin', 'head_karaoke', 'head_unit', 'supervisor'];
 // Laporan "Rencana Kirim" & "Barang Terjual" berisi omzet/nilai rekomendasi
 // order - stokis ('gudang') cuma boleh input barang masuk, lihat riwayat
 // mutasi, dan submit stock opname (lihat 014_stock_opname.sql), tidak
 // berhak lihat laporan penjualan/reorder.
-const SALES_REPORT_ROLES = ['admin', 'supervisor'];
+const SALES_REPORT_ROLES = ['admin', 'head_karaoke', 'head_unit', 'supervisor'];
 
 // GET /api/inventory[?q=&low=1]
 //

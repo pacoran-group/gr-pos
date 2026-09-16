@@ -37,6 +37,7 @@
   --blue: #4fa3ff;
   --blue-dim: rgba(79, 163, 255, 0.15);
   --yellow: #ffd166;
+  --yellow-dim: rgba(255, 209, 102, 0.15);
   --gray: #6b6b85;
   --gray-dim: rgba(107, 107, 133, 0.15);
   --red: #ff5c7a;
@@ -44,6 +45,14 @@
   --radius: 14px;
   --radius-sm: 9px;
   --sidebar-w: 232px;
+
+  /* Isian penuh kartu kamar sesuai status - kuat di tema gelap (ruang
+     karaoke gelap, harus terbaca sekilas). Mode terang override lebih
+     lembut di bawah supaya tidak "tajam" di atas kartu putih. */
+  --status-occupied-bg: linear-gradient(0deg, rgba(155, 107, 255, 0.32), rgba(155, 107, 255, 0.32));
+  --status-locked-bg: linear-gradient(0deg, rgba(255, 209, 102, 0.26), rgba(255, 209, 102, 0.26));
+  --status-maintenance-bg: linear-gradient(0deg, rgba(107, 107, 133, 0.38), rgba(107, 107, 133, 0.38));
+  --status-legacy-bg: linear-gradient(0deg, rgba(62, 230, 216, 0.20), rgba(62, 230, 216, 0.20));
 }
 
 /* =====================================================================
@@ -80,9 +89,17 @@
   --blue: #2f7fd6;
   --blue-dim: rgba(47, 127, 214, 0.12);
   --yellow: #b9820c;
+  --yellow-dim: rgba(185, 130, 12, 0.13);
   --gray: #8a8577;
   --gray-dim: rgba(138, 133, 119, 0.15);
   --red: #d23b52;
+
+  /* Isian kartu kamar jauh lebih lembut di sini daripada tema gelap -
+     opacity tinggi di atas kartu putih terasa tajam/menyilaukan. */
+  --status-occupied-bg: linear-gradient(0deg, rgba(122, 79, 208, 0.10), rgba(122, 79, 208, 0.10));
+  --status-locked-bg: linear-gradient(0deg, rgba(185, 130, 12, 0.10), rgba(185, 130, 12, 0.10));
+  --status-maintenance-bg: linear-gradient(0deg, rgba(138, 133, 119, 0.14), rgba(138, 133, 119, 0.14));
+  --status-legacy-bg: linear-gradient(0deg, rgba(12, 139, 129, 0.10), rgba(12, 139, 129, 0.10));
 }
 
 * { box-sizing: border-box; }
@@ -249,23 +266,23 @@ label.field-label { font-size: 12px; color: var(--text-muted); font-weight: 600;
 
 .room-card.status-occupied {
   border-color: var(--purple); border-top-color: var(--purple);
-  background: linear-gradient(0deg, rgba(155, 107, 255, 0.32), rgba(155, 107, 255, 0.32)), var(--card);
+  background: var(--status-occupied-bg), var(--card);
 }
 
 .room-card.status-locked {
   border-color: var(--yellow); border-top-color: var(--yellow);
-  background: linear-gradient(0deg, rgba(255, 209, 102, 0.26), rgba(255, 209, 102, 0.26)), var(--card);
+  background: var(--status-locked-bg), var(--card);
 }
 
 .room-card.status-maintenance {
   border-color: var(--gray); border-top-color: var(--gray);
-  background: linear-gradient(0deg, rgba(107, 107, 133, 0.38), rgba(107, 107, 133, 0.38)), var(--card);
+  background: var(--status-maintenance-bg), var(--card);
   cursor: not-allowed; opacity: 0.75;
 }
 
 .room-card.status-legacy {
   border-color: var(--cyan); border-top-color: var(--cyan);
-  background: linear-gradient(0deg, rgba(62, 230, 216, 0.20), rgba(62, 230, 216, 0.20)), var(--card);
+  background: var(--status-legacy-bg), var(--card);
   opacity: 0.9; cursor: default;
 }
 .room-card .top-row { display: flex; justify-content: space-between; align-items: flex-start; }

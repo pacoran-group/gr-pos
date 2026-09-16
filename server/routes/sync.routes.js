@@ -10,7 +10,7 @@ router.use(requireAuth);
 
 // POST /api/sync/master - jalankan sinkron master-data 154 -> Server02 sekarang.
 // Manual = SEMUA tabel (FAST + SLOW), dengan fingerprint-skip.
-router.post('/master', requireRole('admin', 'supervisor'), async (req, res, next) => {
+router.post('/master', requireRole('admin', 'head_karaoke', 'head_unit', 'supervisor'), async (req, res, next) => {
   try {
     const result = await masterSync.syncMasterData({ trigger: 'manual', scope: 'all' });
     res.json(result);
@@ -41,7 +41,7 @@ router.get('/legacy-rooms', async (req, res, next) => {
 
 // POST /api/sync/outbox - kirim baris web_sync_outbox yang belum terkirim ke
 // endpoint ingest pusat SEKARANG (selain jadwal berkala worker). 1 tick.
-router.post('/outbox', requireRole('admin', 'supervisor'), async (req, res, next) => {
+router.post('/outbox', requireRole('admin', 'head_karaoke', 'head_unit', 'supervisor'), async (req, res, next) => {
   try {
     const result = await outboxSender.flushOnce();
     res.json(result || { skipped: 'worker nonaktif / SYNC_SENDER_ENABLED off' });
@@ -62,7 +62,7 @@ router.get('/outbox/status', async (req, res, next) => {
 
 // POST /api/sync/opname-pull - tarik antrean approval Stock Opname dari n8n
 // SEKARANG (selain jadwal berkala worker). 1 tick.
-router.post('/opname-pull', requireRole('admin', 'supervisor'), async (req, res, next) => {
+router.post('/opname-pull', requireRole('admin', 'head_karaoke', 'head_unit', 'supervisor'), async (req, res, next) => {
   try {
     const result = await opnamePuller.flushOnce();
     res.json(result || { skipped: 'worker nonaktif / OPNAME_POLL_ENABLED off' });

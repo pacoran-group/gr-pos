@@ -35,8 +35,9 @@
   <script>
     renderLayout({ active: 'dashboard', title: 'Room Monitor', subtitle: 'Status kamar real-time' });
 
-    // admin/supervisor bisa set/lepas maintenance lewat tombol 🔧 di kartu kamar.
-    const canManageRooms = ['admin', 'supervisor'].includes((getUser() || {}).role);
+    // admin/head_karaoke/supervisor bisa set/lepas maintenance lewat tombol 🔧
+    // di kartu kamar. head_unit SENGAJA TIDAK dimasukkan (dibatasi).
+    const canManageRooms = ['admin', 'head_karaoke', 'supervisor'].includes((getUser() || {}).role);
 
     function classify(r) {
       if (r.is_maintenance) return 'maintenance';
@@ -273,7 +274,7 @@
     // paralel / Plan B (gr-pos sempat mati). Perlu rekonsiliasi manual. ---
     async function pollOrphans() {
       const role = (getUser() || {}).role;
-      if (!['admin', 'supervisor'].includes(role)) return;
+      if (!['admin', 'head_karaoke', 'head_unit', 'supervisor'].includes(role)) return;
       try {
         const { orphans, last_poll } = await Api.getLegacyRooms();
         const el = document.getElementById('orphanBanner');

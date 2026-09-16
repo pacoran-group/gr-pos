@@ -103,7 +103,7 @@
     // Folder bersama tempat staff mengunggah foto bukti transfer.
     const RECEIPT_FOLDER_URL = 'https://drive.google.com/drive/folders/1aSQogLpz1VO-zM8Z_bQN4cPGQV1N4FNA?usp=sharing';
 
-    const canManage = ['admin', 'supervisor'].includes((getUser() || {}).role);
+    const canManage = ['admin', 'head_karaoke', 'head_unit', 'supervisor'].includes((getUser() || {}).role);
     let editingId = null;
     let lastRows = [];
 

@@ -55,7 +55,7 @@
   <script>
     renderLayout({ active: 'fnb-hotel', title: 'Laporan F&B Hotel', subtitle: 'Rekap harian per kamar' });
 
-    const canClose = ['admin', 'supervisor'].includes((getUser() || {}).role);
+    const canClose = ['admin', 'head_karaoke', 'head_unit', 'supervisor'].includes((getUser() || {}).role);
     const modalMount = document.getElementById('modalMount');
     function closeModal() { modalMount.innerHTML = ''; }
     modalMount.addEventListener('click', (e) => { if (e.target === modalMount.firstElementChild) closeModal(); });

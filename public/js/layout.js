@@ -70,18 +70,24 @@ const NAV_ITEMS = [
 ];
 
 // Pembatasan menu per-role. Role yang TIDAK terdaftar di sini melihat SEMUA
-// menu (perilaku lama - mis. admin/supervisor/dapur/waiter). Role yang
-// terdaftar HANYA melihat key yang disebut di bawah, dan kalau membuka halaman
-// lain lewat URL langsung / bookmark lama akan ditendang balik ke halaman
-// pertama jatahnya (lihat guard di renderLayout).
-//   gudang -> cuma Inventory
-//   kasir  -> Room Monitor + Orders/Checkout + F&B Hotel (tanpa Produk, Promo,
-//             Inventory, Pengeluaran, Reports, Analitik, Settings)
+// menu (perilaku lama - mis. admin/head_karaoke/supervisor/dapur/waiter). Role
+// yang terdaftar HANYA melihat key yang disebut di bawah, dan kalau membuka
+// halaman lain lewat URL langsung / bookmark lama akan ditendang balik ke
+// halaman pertama jatahnya (lihat guard di renderLayout).
+//   gudang      -> cuma Inventory
+//   kasir       -> Room Monitor + Orders/Checkout + F&B Hotel (tanpa Produk,
+//                  Promo, Inventory, Pengeluaran, Reports, Analitik, Settings)
+//   head_unit   -> semua menu KECUALI Analitik (juga tidak bisa set kamar
+//                  Maintenance - lihat canManageRooms di dashboard.html &
+//                  gate server di rooms.routes.js)
+//   head_karaoke-> tidak didaftarkan di sini = semua menu terbuka (setara admin)
 const ROLE_NAV = {
   gudang: ['inventory'],
   // 'orders' tetap di daftar BOLEH (dibuka lewat klik kamar) walau tidak
   // muncul di sidebar (hidden:true).
   kasir: ['dashboard', 'orders', 'fnb-hotel', 'kasir'],
+  head_unit: ['dashboard', 'orders', 'fnb-hotel', 'products', 'promo', 'inventory',
+    'pengeluaran', 'kasir', 'reports', 'laporan-void', 'settings'],
 };
 
 // Halaman awal (setelah login / setelah guard menendang) untuk role terbatas.
@@ -190,7 +196,7 @@ function renderLayout({ active, title, subtitle, badgeHtml, onSearch }) {
   // (isi kas fisik, lihat selisih) sebelum logout. Kalau tidak -> logout biasa.
   document.getElementById('btnLogoutNav').addEventListener('click', async () => {
     const plainLogout = () => { clearSession(); window.location.href = '/index.html'; };
-    if (typeof Api === 'undefined' || !Api.currentShift || !['kasir', 'admin', 'supervisor'].includes(user.role)) {
+    if (typeof Api === 'undefined' || !Api.currentShift || !['kasir', 'admin', 'head_karaoke', 'head_unit', 'supervisor'].includes(user.role)) {
       return plainLogout();
     }
     let cur = null;
@@ -220,8 +226,8 @@ function renderLayout({ active, title, subtitle, badgeHtml, onSearch }) {
   }
 
   // Pil status shift di topbar. Kasir: selalu tampil (hijau=buka / kuning=belum).
-  // admin/supervisor: hanya tampil kalau kebetulan punya shift terbuka.
-  if (['kasir', 'admin', 'supervisor'].includes(user.role) && typeof Api !== 'undefined' && Api.currentShift) {
+  // admin/head_karaoke/head_unit/supervisor: hanya tampil kalau kebetulan punya shift terbuka.
+  if (['kasir', 'admin', 'head_karaoke', 'head_unit', 'supervisor'].includes(user.role) && typeof Api !== 'undefined' && Api.currentShift) {
     const pill = document.getElementById('shiftPill');
     Api.currentShift().then(({ shift }) => {
       if (!pill) return;

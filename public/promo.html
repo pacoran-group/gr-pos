@@ -56,7 +56,7 @@
   <script src="/js/layout.js"></script>
   <script>
     renderLayout({ active: 'promo', title: 'Promo', subtitle: 'B1G1 & paket' });
-    const canManage = ['admin', 'supervisor'].includes((getUser() || {}).role);
+    const canManage = ['admin', 'head_karaoke', 'head_unit', 'supervisor'].includes((getUser() || {}).role);
     const modalMount = document.getElementById('modalMount');
     const DOW = [['1','Sen'],['2','Sel'],['3','Rab'],['4','Kam'],['5','Jum'],['6','Sab'],['7','Min']];
     const rp = (n) => 'Rp' + Number(n || 0).toLocaleString('id-ID');

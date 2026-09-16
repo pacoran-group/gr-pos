@@ -85,7 +85,8 @@
   <script>
     renderLayout({ active: 'analitik', title: 'Analitik', subtitle: 'Insight performa unit' });
 
-    const canView = ['admin', 'supervisor'].includes((getUser() || {}).role);
+    // head_unit SENGAJA tidak dimasukkan - Analitik disembunyikan dari role ini.
+    const canView = ['admin', 'head_karaoke', 'supervisor'].includes((getUser() || {}).role);
     const DOW = ['Min', 'Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab'];
     const DOW_ORDER = [1, 2, 3, 4, 5, 6, 0]; // tampilkan Sen..Min
 

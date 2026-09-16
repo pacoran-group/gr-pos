@@ -59,7 +59,7 @@
   <script>
     renderLayout({ active: 'products', title: 'Manajemen Produk', subtitle: 'Katalog F&B' });
 
-    const canManage = ['admin', 'supervisor'].includes((getUser() || {}).role);
+    const canManage = ['admin', 'head_karaoke', 'head_unit', 'supervisor'].includes((getUser() || {}).role);
     const modalMount = document.getElementById('modalMount');
     const rp = (n) => 'Rp' + Number(n || 0).toLocaleString('id-ID');
     const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) =>

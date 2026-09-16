@@ -19,7 +19,8 @@ const { UNIT_ID, UNIT_NAME } = require('../config/unit');
 
 const router = express.Router();
 router.use(requireAuth);
-const MANAGE = ['admin', 'supervisor'];
+// head_unit SENGAJA tidak dimasukkan - Analitik disembunyikan dari role ini.
+const MANAGE = ['admin', 'head_karaoke', 'supervisor'];
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 const pad = (n) => String(n).padStart(2, '0');
