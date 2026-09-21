@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server/server.js",
     "dev": "node --watch server/server.js",
+    "preflight": "node server/utils/preflightCheck.js",
     "seed:demo": "node server/utils/seedDemoSales.js",
     "seed:demo:wipe": "node server/utils/seedDemoSales.js --wipe"
   },

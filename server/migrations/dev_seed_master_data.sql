@@ -1,15 +1,38 @@
 -- =====================================================================
--- HANYA UNTUK DEV/TEST LOKAL - JANGAN JALANKAN DI DATABASE PRODUKSI
--- (`bintangnew` yang asli SUDAH PUNYA data master ini - m_room, m_promo,
--- m_product, dst. Menjalankan script ini di sana akan bentrok/duplikat.)
+-- DUA KEGUNAAN file ini (SAMA-SAMA aman, karena semua CREATE TABLE pakai
+-- IF NOT EXISTS dan semua INSERT pakai IGNORE - jalan ulang tidak
+-- menduplikasi/menimpa data yang sudah ada):
 --
--- Kegunaan: kalau developer ingin menguji aplikasi ini di database
--- MySQL kosong (mis. laptop developer, sebelum instalasi di server LAN
--- Grand Royal yang sebenarnya), script ini membuat versi MINIMAL dari
--- tabel master yang dibutuhkan (m_room, m_promo, m_product, m_category,
--- tax_service, m_member) berisi data contoh yang meniru struktur nyata
--- (32 kamar, 6 tipe kamar, threshold m_promo) sesuai temuan di
--- rencana-sistem-baru.md - BUKAN data asli venue.
+-- 1) DEV/TEST LOKAL - jalankan APA ADANYA di database kosong (laptop
+--    developer) untuk mencoba aplikasi tanpa data asli venue manapun.
+--
+-- 2) TEMPLATE "Jalur B" produksi (unit baru yang BELUM PERNAH punya sistem
+--    kasir/database lama sama sekali - lihat README bagian 1). gr-pos
+--    tidak (dan tidak akan) punya halaman admin untuk membuat kamar, tipe
+--    kamar/tarif, % service charge, atau member - satu-satunya cara tabel
+--    itu terisi di database yang benar-benar baru adalah SQL manual. Untuk
+--    kasus ini: COPY file ini, HAPUS/GANTI seluruh baris di bagian "DATA
+--    CONTOH" di bawah dengan data ASLI unit ybs (kamar, tipe & tarif
+--    kamar, % service charge), baru dijalankan di database unit itu.
+--
+-- JANGAN dijalankan (apalagi dgn data contoh di bawah) di database yang
+-- SUDAH punya data master asli (mis. `bintangnew` Grand Royal, atau unit
+-- manapun yang datanya sudah diisi) - isi tabelnya akan bentrok dengan
+-- data asli / kamar dobel.
+--
+-- SKEMA di bawah ini SUDAH DISESUAIKAN (21 Sep 2026) dengan skema nyata
+-- yang dipakai kode SEKARANG (bukan tebakan awal developer yang salah -
+-- lihat server/routes/catalog.routes.js, products.routes.js,
+-- trans.routes.js untuk skema asli yang dikonfirmasi dari database
+-- produksi Grand Royal). Catatan penting kalau unit lain punya sistem
+-- kasir lama dengan skema BERBEDA dari ini (sangat mungkin - vendor beda):
+-- jalankan `node server/utils/preflightCheck.js` setelah import data lama
+-- unit itu untuk mendeteksi kolom yang tidak cocok SEBELUM go-live, bukan
+-- ditemukan nanti sebagai "menu produk kosong" tanpa pesan error.
+--
+-- Tabel m_category SENGAJA TIDAK dibuat di sini - sejak 29 Agu 2026 kode
+-- tidak lagi memakai tabel kategori terpisah, `m_product.category` sudah
+-- menyimpan nama kategori langsung sebagai teks (lihat products.routes.js).
 -- =====================================================================
 
 CREATE TABLE IF NOT EXISTS m_room (
@@ -19,6 +42,9 @@ CREATE TABLE IF NOT EXISTS m_room (
   status VARCHAR(5) NOT NULL DEFAULT '1'
 ) ENGINE=InnoDB;
 
+-- room_type di sini HARUS sama persis (termasuk spasi/huruf besar-kecil)
+-- dengan room_type yang dipakai di m_room di atas - dipakai untuk mencari
+-- tarif kamar saat buka kamar (server/services/threshold.service.js).
 CREATE TABLE IF NOT EXISTS m_promo (
   promo_id INT AUTO_INCREMENT PRIMARY KEY,
   room_type VARCHAR(20) NOT NULL,
@@ -27,48 +53,54 @@ CREATE TABLE IF NOT EXISTS m_promo (
   urut INT NOT NULL DEFAULT 0
 ) ENGINE=InnoDB;
 
-CREATE TABLE IF NOT EXISTS m_category (
-  category_id INT AUTO_INCREMENT PRIMARY KEY,
-  category_name VARCHAR(50) NOT NULL
-) ENGINE=InnoDB;
-
+-- Skema PERSIS sama dengan m_product produksi Grand Royal (lihat
+-- products.routes.js baris komentar header). Kolom qty_stok/jenis_stok/
+-- disc/sc/ppn tidak dipakai logika gr-pos, hanya di-insert dgn nilai
+-- default supaya konsisten dengan skema asli.
 CREATE TABLE IF NOT EXISTS m_product (
-  product_id VARCHAR(25) PRIMARY KEY,
-  product_name VARCHAR(150) NOT NULL,
-  category_id INT NULL,
-  price DECIMAL(12,2) NOT NULL,
-  active TINYINT(1) NOT NULL DEFAULT 1
+  prod_id INT AUTO_INCREMENT PRIMARY KEY,
+  prod_desc VARCHAR(150) NOT NULL,
+  category VARCHAR(50) NOT NULL,
+  qty_stok INT NOT NULL DEFAULT 0,
+  harga_jual DOUBLE NOT NULL,
+  tgl_masuk DATE NULL,
+  satuan VARCHAR(15) NULL,
+  harga_mdl DOUBLE NOT NULL DEFAULT 0,
+  jenis_stok VARCHAR(20) NULL,
+  is_active VARCHAR(15) NOT NULL DEFAULT 'TRUE',
+  disc DOUBLE NOT NULL DEFAULT 0,
+  sc DOUBLE NOT NULL DEFAULT 0,
+  ppn DOUBLE NOT NULL DEFAULT 0
 ) ENGINE=InnoDB;
 
+-- 1 baris saja dipakai (LIMIT 1 di catalog.routes.js/trans.routes.js) -
+-- kolom `tax_service` adalah % service charge yang berlaku (bukan nama
+-- tabelnya - penamaan asli begini, memang membingungkan).
 CREATE TABLE IF NOT EXISTS tax_service (
   id INT AUTO_INCREMENT PRIMARY KEY,
-  service_charge_pct DECIMAL(5,2) NOT NULL
+  room_tax INT NOT NULL DEFAULT 0,
+  food_tax INT NOT NULL DEFAULT 0,
+  tax_service INT NOT NULL DEFAULT 0
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS m_member (
-  member_id VARCHAR(25) PRIMARY KEY,
-  member_name VARCHAR(100) NOT NULL,
-  disc_room_pct DECIMAL(5,2) NOT NULL DEFAULT 0,
-  disc_fnb_pct DECIMAL(5,2) NOT NULL DEFAULT 0,
-  active TINYINT(1) NOT NULL DEFAULT 1
+  id_member VARCHAR(25) PRIMARY KEY,
+  ktp VARCHAR(30) NULL,
+  nama_member VARCHAR(100) NOT NULL,
+  alamat VARCHAR(255) NULL,
+  telp VARCHAR(30) NULL,
+  disc_room DECIMAL(5,2) NOT NULL DEFAULT 0,
+  disc_fnb DECIMAL(5,2) NOT NULL DEFAULT 0,
+  tgl_expired DATE NULL
 ) ENGINE=InnoDB;
 
--- --- Data contoh (bukan data asli) ---
+-- =====================================================================
+-- DATA CONTOH (bukan data asli venue manapun) - untuk pemakaian #2 di
+-- atas (Jalur B produksi), GANTI SEMUA baris di bawah ini dengan data
+-- asli unit sebelum dipakai staf sungguhan.
+-- =====================================================================
 
-INSERT IGNORE INTO m_category (category_id, category_name) VALUES
-  (1,'Makanan'), (2,'Minuman'), (3,'Snack'), (4,'Rokok'), (5,'Bar');
-
--- Contoh routing: kategori "Bar" (id 5, minuman siap saji/beralkohol) tidak
--- perlu tiket dapur - cukup diambil dari gudang (sudah ada di slip gudang).
--- Kategori lain default needs_cooking=1 (Makanan perlu dimasak, dst).
-INSERT IGNORE INTO web_category_routing (category_id, needs_cooking, note) VALUES
-  (1, 1, 'Makanan - perlu dimasak dapur'),
-  (2, 1, 'Minuman non-bar (jus, teh, dsb) - contoh, sesuaikan'),
-  (3, 1, 'Snack - contoh, sesuaikan'),
-  (4, 0, 'Rokok - tidak perlu dimasak'),
-  (5, 0, 'Bar - minuman siap saji/beralkohol, cukup ambil dari gudang');
-
-INSERT IGNORE INTO tax_service (id, service_charge_pct) VALUES (1, 5.00);
+INSERT IGNORE INTO tax_service (id, room_tax, food_tax, tax_service) VALUES (1, 0, 0, 5);
 
 INSERT IGNORE INTO m_promo (room_type, harga_sewa, harga_sewa1, urut) VALUES
   ('SMALL', 150000, 200000, 1),
@@ -78,15 +110,15 @@ INSERT IGNORE INTO m_promo (room_type, harga_sewa, harga_sewa1, urut) VALUES
   ('VIP U', 500000, 650000, 5),
   ('VIP S', 650000, 800000, 6);
 
-INSERT IGNORE INTO m_product (product_id, product_name, category_id, price, active) VALUES
-  ('P001', 'Kentang Goreng', 1, 35000, 1),
-  ('P002', 'Nasi Goreng', 1, 45000, 1),
-  ('P003', 'Es Teh Manis', 2, 15000, 1),
-  ('P004', 'Jus Alpukat', 2, 25000, 1),
-  ('P005', 'Kacang Kulit', 3, 20000, 1);
+INSERT IGNORE INTO m_product (prod_id, prod_desc, category, harga_jual, harga_mdl, satuan, is_active, qty_stok, tgl_masuk, jenis_stok, disc, sc, ppn) VALUES
+  (1, 'Kentang Goreng', 'MAKANAN', 35000, 20000, 'PORSI', 'TRUE', 0, CURDATE(), '', 0, 0, 0),
+  (2, 'Nasi Goreng', 'MAKANAN', 45000, 25000, 'PORSI', 'TRUE', 0, CURDATE(), '', 0, 0, 0),
+  (3, 'Es Teh Manis', 'MINUMAN', 15000, 5000, 'GELAS', 'TRUE', 0, CURDATE(), '', 0, 0, 0),
+  (4, 'Jus Alpukat', 'MINUMAN', 25000, 12000, 'GELAS', 'TRUE', 0, CURDATE(), '', 0, 0, 0),
+  (5, 'Kacang Kulit', 'SNACK', 20000, 10000, 'PORSI', 'TRUE', 0, CURDATE(), '', 0, 0, 0);
 
-INSERT IGNORE INTO m_member (member_id, member_name, disc_room_pct, disc_fnb_pct, active) VALUES
-  ('M001', 'Member Contoh', 10.00, 5.00, 1);
+INSERT IGNORE INTO m_member (id_member, nama_member, disc_room, disc_fnb, tgl_expired) VALUES
+  ('M001', 'Member Contoh', 10.00, 5.00, '2099-12-31');
 
 -- 32 kamar contoh (10 SMALL, 7 MEDIUM, 2 BIG, 6 VIP, 6 VIP U, 1 VIP S)
 INSERT IGNORE INTO m_room (room_id, room_name, room_type, status) VALUES

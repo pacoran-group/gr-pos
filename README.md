@@ -115,6 +115,55 @@ dengan `DB_NAME` yang akan diisi di `.env` langkah berikutnya):
 mysql -u root -p -e "CREATE DATABASE nama_database_unit CHARACTER SET utf8mb4"
 ```
 
+### Penting - "database kosong" TIDAK CUKUP untuk mulai pakai gr-pos
+
+Ini titik yang paling sering bikin instalasi terlihat gagal ("berhasil install
+tapi tidak ada database yang tersedia", "masuk aplikasi tapi kosong semua").
+Migration di bagian 3 di bawah **hanya membuat tabel baru berprefix `web_`**
+(transaksi, inventory, promo, dst - fitur-fitur BARU gr-pos). Migration
+**TIDAK membuat** tabel data master yang dipakai di HAMPIR SEMUA halaman:
+daftar kamar (`m_room`), katalog produk (`m_product`), tarif kamar
+(`m_promo`), % service charge (`tax_service`), data member (`m_member`).
+Tanpa tabel-tabel ini, Dashboard/Orders akan kosong atau error SQL walau
+migration & login sudah sukses.
+
+Dari mana isinya? Tergantung kondisi unit ini - pilih SATU jalur:
+
+- **Jalur A - unit ini menggantikan sistem kasir/billing lama yang sudah
+  punya database** (kasus Grand Royal): minta dump SQL database lama itu ke
+  vendor/admin sistem lama, lalu **impor SEBELUM menjalankan migration**:
+  ```
+  mysql -u root -p nama_database_unit < dump_sistem_lama.sql
+  ```
+  Kalau sistem lama itu **masih dipakai berjalan** di server terpisah (mis.
+  untuk player lagu karaoke) dan mau tetap disinkron, lihat bagian "6b"
+  di bawah - `m_room`/`m_promo`/`tax_service` malah bisa otomatis ditarik
+  dari server lama itu tiap gr-pos start (tidak perlu impor dump manual
+  untuk 3 tabel itu, tapi `m_product` tetap perlu diimpor sekali karena
+  sejak gr-pos punya halaman Manajemen Produk sendiri, produk TIDAK lagi
+  disinkron otomatis dari sistem lama).
+- **Jalur B - unit ini benar-benar baru, belum pernah punya sistem kasir
+  digital sama sekali**: gr-pos **tidak** punya halaman admin untuk membuat
+  kamar/tipe kamar/tarif/% service charge/member - itu semua harus diisi
+  lewat SQL manual sekali di awal. Pakai
+  `server/migrations/dev_seed_master_data.sql` sebagai TEMPLATE: copy
+  filenya, ganti seluruh baris di bagian "DATA CONTOH" dengan data asli
+  unit ini (daftar kamar, tipe & tarif kamar, % service charge), baru
+  jalankan di database unit ini. Katalog produk (`m_product`) setelah itu
+  bisa diisi lewat halaman **Products** di aplikasi (tidak perlu SQL
+  manual) - lihat skema kolomnya di komentar
+  `server/routes/products.routes.js`.
+
+Yang manapun jalurnya, jalankan `npm run preflight` (bagian 3) setelah
+migration untuk mengecek data master ini sudah ada/terisi SEBELUM lanjut ke
+`npm start` dan dipakai staf.
+
+**Cara cepat (disarankan untuk Jalur A):** bagian 2-5 di bawah (install,
+`.env`, migration, preflight, buat admin) bisa dijalankan otomatis lewat
+satu skrip - lihat `ops/install/README.md`. Bagian 2-5 tetap didokumentasikan
+apa adanya di bawah supaya jelas apa yang sebenarnya dikerjakan skrip itu,
+dan sebagai jalan manual kalau skripnya gagal/tidak bisa dipakai.
+
 ## 2. Install
 
 Salin folder `gr-pos` ini ke komputer server, lalu di dalam foldernya:
@@ -150,37 +199,86 @@ sengaja dinyalakan).
 Jalankan seluruh file di `server/migrations/` **berurutan sesuai nomor**
 (001 sampai nomor terbesar) di database unit ini - migration hanya membuat
 tabel baru berprefix `web_` (kecuali disebutkan lain di komentar filenya),
-tidak mengubah tabel app lama:
+tidak mengubah tabel app lama. Kalau baru sampai di sini dan unit ini pakai
+Jalur A (bagian 1), **impor dump sistem lama dulu** sebelum menjalankan
+migration di bawah - migration TIDAK membuat tabel data master.
 
+**Windows - PowerShell** (server ini biasanya server Windows, jalankan dari
+folder `gr-pos`, sesuaikan `<path-mysql>` & `namadatabase`):
+
+```powershell
+Get-ChildItem server\migrations\0*.sql | Sort-Object Name | ForEach-Object {
+  Write-Host "Menjalankan $($_.Name)..."
+  Get-Content $_.FullName -Raw | & "<path-mysql>\mysql.exe" -u root -p namadatabase
+}
 ```
+
+(`<path-mysql>` contoh: `C:\Program Files\MariaDB 12.3\bin` - mysql akan
+minta password root tiap file, itu normal.)
+
+**Linux/Mac - bash**:
+
+```bash
 for f in server/migrations/0*.sql; do mysql -u root -p namadatabase < "$f"; done
 ```
 
-(atau jalankan satu-satu lewat phpMyAdmin/HeidiSQL kalau lebih nyaman -
+Atau jalankan satu-satu lewat phpMyAdmin/HeidiSQL kalau lebih nyaman -
 urutannya tetap harus sesuai nomor karena migration belakangan bisa
-bergantung pada kolom/tabel dari migration sebelumnya).
+bergantung pada kolom/tabel dari migration sebelumnya. **Jangan skip file
+manapun** meski isinya sekilas tidak relevan (mis. F&B Hotel) - migration
+belakangan tetap dijalankan berurutan.
 
-`server/migrations/dev_seed_master_data.sql` **HANYA** untuk mencoba di
-database kosong/laptop developer - **JANGAN** dijalankan di database
-produksi yang sudah punya data master asli.
+`server/migrations/dev_seed_master_data.sql` **TIDAK** ikut ter-jalankan
+oleh perintah di atas (glob-nya `0*.sql`, file ini sengaja tidak diberi
+nomor). File ini untuk mencoba di database kosong/laptop developer, ATAU
+sebagai template Jalur B (lihat bagian 1) - **JANGAN** dijalankan apa
+adanya (dengan data contohnya) di database produksi yang sudah punya data
+master asli.
 
-## 4. Isi tabel `web_category_routing` (kalau pakai alur dapur)
+### Cek hasil migration
 
-Supaya item yang perlu dimasak (dapur) dan yang tidak (mis. kategori
-"Bar"/minuman siap saji) ke-routing dengan benar, isi tabel ini sesuai
-`category_id` ASLI di `m_category` unit ini:
+Setelah semua file di atas dijalankan (dan, kalau relevan, data master
+Jalur A/B di bagian 1 sudah ada), jalankan preflight check untuk
+memvalidasi semuanya sebelum lanjut:
+
+```
+npm run preflight
+```
+
+Script ini mengecek: koneksi database, semua tabel `web_*` penting ada
+(mendeteksi kalau ada file migration yang ke-skip), tabel data master
+(`m_room`/`m_product`/`m_promo`/`tax_service`/`m_member`) ada & tidak
+kosong, beberapa kecocokan skema kolom yang dulu pernah jadi bug diam-diam
+di Grand Royal (mis. `m_product.is_active`), dan `.env` (`JWT_SECRET`
+sudah diganti, dst). Kalau ada baris **FATAL**, beresin dulu sebelum
+lanjut - kalau cuma **PERINGATAN**, boleh lanjut tapi sebaiknya dicek juga
+sebelum staf mulai pakai sistemnya.
+
+## 4. Isi tabel `web_product_routing` (kalau pakai alur dapur)
+
+Supaya item yang perlu dimasak (dapur, cetak tiket di `/dapur.html`) dan
+yang tidak (mis. minuman siap saji/rokok, cukup diambil dari gudang/bar)
+ke-routing dengan benar, isi tabel ini **per PRODUK** (bukan per kategori -
+`web_category_routing` dari migration 001 sudah tidak dipakai lagi sejak
+27 Agustus 2026, lihat catatan di `server/routes/trans.routes.js`
+`fetchItemsWithPrice()`). Tabel `web_product_routing` sendiri sudah dibuat
+otomatis oleh migration `023_product_routing_table.sql` di bagian 3 -
+bagian ini hanya soal MENGISI datanya:
 
 ```sql
-SELECT category_id, category_name FROM m_category; -- lihat dulu daftarnya
+SELECT prod_id, prod_desc, category FROM m_product ORDER BY category; -- lihat dulu daftar produk unit ini
 
-INSERT INTO web_category_routing (category_id, needs_cooking, note) VALUES
-  (1, 1, 'Makanan - perlu dimasak'),
-  (2, 0, 'Bar/minuman siap saji - cukup dari gudang')
+INSERT INTO web_product_routing (product_id, needs_cooking, note) VALUES
+  ('12', 1, 'Nasi Goreng - perlu dimasak dapur'),
+  ('34', 0, 'Teh Botol - siap saji, cukup dari gudang/bar')
 ON DUPLICATE KEY UPDATE needs_cooking = VALUES(needs_cooking);
 ```
 
-Kategori yang belum diisi di tabel ini default `needs_cooking = 1` (aman -
-tetap dapat tiket dapur).
+Produk yang belum diisi di tabel ini default `needs_cooking = 1` (aman -
+tetap dapat tiket dapur, tidak akan "hilang" begitu saja kalau lupa
+diisi). Untuk Grand Royal, data routing 265 produk yang sudah pernah
+diisi ada di `web_product_routing.sql` (root folder proyek, DATA
+SPESIFIK Grand Royal - **jangan** dijalankan di database unit lain).
 
 ## 5. Buat user pertama (admin)
 
