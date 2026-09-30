@@ -48,9 +48,8 @@ terminal tidak bisa mengubah kamar yang sama secara bersamaan.
 - **Tema**: dark (default) + light, toggle di sidebar, tersimpan per-browser.
 - **Idempotency key** di Buka Kamar/Tambah Order/Tutup Kamar - request yang
   sama terkirim ulang (timeout/koneksi lambat) tidak diproses dua kali.
-- **Sinkronisasi opsional ke pusat**: `web_sync_outbox` (per modul: stock,
-  expense, daily_close) bisa dikirim ke webhook n8n pusat kalau
-  `SYNC_SENDER_ENABLED=on` - lihat bagian "Multi-unit" di bawah.
+- **Jejak untuk konsolidasi pusat**: `web_sync_outbox` (per modul: stock,
+  expense, daily_close) - lihat bagian "Multi-unit" di bawah.
 
 Beberapa modul (room billing karaoke, sinkron player ke server lagu lama)
 memang spesifik venue karaoke - kalau unit tujuan bukan karaoke, modul itu
@@ -424,7 +423,6 @@ gr-pos/
     laporan-void.html               - Rekap void per sesi kasir
     analitik.html                   - Dashboard KPI manajemen
     settings.html                   - Setelan nama printer per-terminal
-    opname-signer.html              - Alat generate keypair approval opname (idle)
     js/api.js                       - wrapper panggilan API
     js/layout.js                    - sidebar+topbar bersama, ROLE_NAV/ROLE_HOME
     js/qz-print.js, receipt-print.js - modul cetak lokal via QZ Tray
@@ -444,12 +442,10 @@ default**:
 
 - `SYNC_OUTBOX_ENABLED=on` - tiap mutasi (stok, pengeluaran, tutup hari)
   ditulis juga sebagai baris `web_sync_outbox` (belum dikirim ke mana pun).
-- `SYNC_SENDER_ENABLED=on` + `SYNC_INGEST_URL` - worker
-  `outboxSender.service.js` mengirim baris yang menumpuk itu ke webhook
-  n8n pusat secara berkala.
 
-Selama kedua flag ini `off`, gr-pos berjalan sepenuhnya independen per unit
-(tidak ada data yang keluar dari database unit itu sendiri).
+Tidak ada worker yang mengirim data keluar - gr-pos berjalan sepenuhnya
+independen per unit (tidak ada data yang keluar dari database unit itu
+sendiri).
 
 ## 11. Keamanan & catatan penting
 

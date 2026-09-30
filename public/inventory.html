@@ -795,12 +795,7 @@
                <button class="btn btn-primary" id="opDetApply" style="flex:1 1 45%">Terapkan</button>
                <button class="btn btn-outline" id="opDetReject" style="flex:1 1 45%">Tolak</button>
              </div>
-             <p class="muted" style="margin-top:6px">Pastikan warehouse sudah setuju (telepon/WA) sebelum menekan Terapkan - qty yang dipakai adalah hitungan stokis di atas.</p>` : ''}
-             <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap">
-               <button class="btn btn-outline" id="opDetCopy" style="flex:1 1 45%">Salin JSON untuk Holding</button>
-               <button class="btn btn-outline" id="opDetImport" style="flex:1 1 45%">Impor Persetujuan Holding</button>
-             </div>
-             <p class="muted" style="margin-top:6px">Alternatif: kirim JSON di atas ke holding → holding tandatangani di halaman signer → tempel/unggah hasilnya di sini.</p>`
+             <p class="muted" style="margin-top:6px">Pastikan warehouse sudah setuju (telepon/WA) sebelum menekan Terapkan - qty yang dipakai adalah hitungan stokis di atas.</p>` : ''}`
           : '';
         wrap.innerHTML = `
           <p class="muted">${escHtml(det.created_by_name || '-')} · ${new Date(det.created_at).toLocaleString('id-ID')} · <span class="op-status ${det.status}">${OPNAME_STATUS_LABEL[det.status] || det.status}</span></p>
@@ -845,73 +840,9 @@
             loadOpnameSessions();
           } catch (err) { errEl.textContent = err.message; errEl.style.display = 'block'; rejectBtn.disabled = false; }
         });
-
-        const copyBtn = document.getElementById('opDetCopy');
-        if (copyBtn) copyBtn.addEventListener('click', async () => {
-          try {
-            const j = await Api.getOpnameSignerJson(id);
-            await navigator.clipboard.writeText(JSON.stringify(j, null, 2));
-            copyBtn.textContent = 'Tersalin ✔ — kirim ke holding';
-            setTimeout(() => (copyBtn.textContent = 'Salin JSON untuk Holding'), 2000);
-          } catch (err) { errEl.textContent = err.message; errEl.style.display = 'block'; }
-        });
-
-        const importBtn = document.getElementById('opDetImport');
-        if (importBtn) importBtn.addEventListener('click', () => openImportApprovalModal(id));
       } catch (err) {
         document.getElementById('opDetWrap').innerHTML = `<p class="error-text" style="margin:0">${escHtml(err.message)}</p>`;
       }
-    }
-
-    // Modal impor blob persetujuan holding (tempel teks / unggah file).
-    function openImportApprovalModal(id) {
-      const ov = document.createElement('div');
-      ov.className = 'modal-overlay';
-      ov.style.zIndex = '1200';
-      ov.innerHTML = `
-        <div class="modal-box card" style="max-width:560px">
-          <h3>Impor Persetujuan Holding</h3>
-          <p class="muted">Tempel blob dari holding (WA/email) atau unggah file <code>.json</code>-nya. Sistem verifikasi tanda tangan lalu menerapkan / menolak sesi ini.</p>
-          <textarea class="field" id="impBlob" placeholder='{"alg":"ES256","signed":"...","sig":"..."}' style="min-height:120px;font-family:Consolas,monospace;font-size:12px"></textarea>
-          <input type="file" id="impFile" accept=".json,application/json" style="margin:6px 0" />
-          <div id="impErr" class="error-text" style="display:none"></div>
-          <div style="display:flex;gap:8px;margin-top:10px">
-            <button class="btn btn-primary" id="impDo" style="flex:1">Verifikasi &amp; Terapkan</button>
-            <button class="btn btn-outline" id="impCancel" style="flex:1">Batal</button>
-          </div>
-        </div>`;
-      document.body.appendChild(ov);
-      const close = () => ov.remove();
-      ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
-      ov.querySelector('#impCancel').addEventListener('click', close);
-      ov.querySelector('#impFile').addEventListener('change', (e) => {
-        const f = e.target.files[0];
-        if (!f) return;
-        const r = new FileReader();
-        r.onload = () => { ov.querySelector('#impBlob').value = r.result; };
-        r.readAsText(f);
-      });
-      ov.querySelector('#impDo').addEventListener('click', async () => {
-        const err = ov.querySelector('#impErr'); err.style.display = 'none';
-        const raw = ov.querySelector('#impBlob').value.trim();
-        if (!raw) { err.textContent = 'Tempel blob atau pilih file dulu.'; err.style.display = 'block'; return; }
-        const btn = ov.querySelector('#impDo'); btn.disabled = true;
-        try {
-          let blob; try { blob = JSON.parse(raw); } catch (e) { blob = raw; } // kirim object kalau bisa, string kalau tidak
-          const res = await Api.importOpnameApproval(id, blob);
-          close();
-          closeModal();
-          if (res.decision === 'rejected') {
-            showToast(`Opname DITOLAK oleh holding (${res.approved_by_holding || '-'}).`, 'error');
-          } else {
-            showToast(`Opname DITERAPKAN — disetujui holding (${res.approved_by_holding || '-'}), ${res.items.length} produk.`);
-            await load();
-          }
-          loadOpnameSessions();
-        } catch (e) {
-          err.textContent = e.message; err.style.display = 'block'; btn.disabled = false;
-        }
-      });
     }
 
     // Lembar cetak Hitung Fisik: kertas kosong (blank Stok Fisik/Catatan) buat

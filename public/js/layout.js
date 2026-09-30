@@ -59,8 +59,8 @@ const NAV_ITEMS = [
   { key: 'products', label: 'Produk', href: '/products.html', i: 'tag' },
   { key: 'promo', label: 'Promo', href: '/promo.html', i: 'plus' },
   { key: 'inventory', label: 'Inventory', href: '/inventory.html', i: 'box' },
-  // Pengeluaran: form sederhana di gr-pos (migration 013), menggantikan alur
-  // "scan QR -> form n8n" yang tidak jalan. Halaman gate ke admin/supervisor.
+  // Pengeluaran: form sederhana di gr-pos (migration 013). Halaman gate ke
+  // admin/supervisor.
   { key: 'pengeluaran', label: 'Pengeluaran', href: '/pengeluaran.html', i: 'cash' },
   { key: 'kasir', label: 'Tutup Kasir', href: '/tutup-kasir.html', i: 'cash' },
   { key: 'reports', label: 'Reports', href: '/reports.html', i: 'chart' },

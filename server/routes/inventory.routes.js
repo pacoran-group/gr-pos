@@ -17,8 +17,7 @@ const { pool, withTransaction } = require('../config/db');
 const { requireAuth, requireRole } = require('../middleware/auth');
 const { AppError } = require('../middleware/errorHandler');
 const { UNIT_ID, WAREHOUSE_ID, UNIT_NAME, SYNC_OUTBOX_ENABLED } = require('../config/unit');
-const { OPNAME_LOCAL_APPLY, OPNAME_REPORT_RECIPIENTS, opnameMailConfigured } = require('../config/opname');
-const opnameApproval = require('../services/opnameApproval.service');
+const { OPNAME_REPORT_RECIPIENTS, opnameMailConfigured } = require('../config/opname');
 const stock = require('../services/stock.service');
 const mailer = require('../services/mailer.service');
 
@@ -371,16 +370,14 @@ router.post('/:productId/adjust', requireRole(...STOCK_ADJUST_ROLES), async (req
 });
 
 // =====================================================================
-// Stock Opname dua-tahap. Lihat catatan panjang di
-// migrations/014_stock_opname.sql: stokis SUBMIT hitung fisik (tidak
-// mengubah stok), admin/supervisor unit yang APPLY setelah holding
-// review (di luar sistem ini, lewat dashboard pusat kalau sudah aktif -
-// lihat central-reporting/) memberi lampu hijau.
+// Stock Opname. Sejak migration 020 submit stokis langsung diterapkan ke
+// stok + diemail ke gudang. /apply & /reject di bawah hanya untuk sesi lama
+// yang masih 'pending' (sebelum 020).
 // =====================================================================
 
 // -------------------------------------------------------------------
-// Email laporan Stock Opname (2026-09-14: menggantikan approval holding -
-// lihat catatan panjang di config/opname.js). Dikirim otomatis setiap kali
+// Email laporan Stock Opname (2026-09-14: menggantikan approval holding,
+// lihat migration 020). Dikirim otomatis setiap kali
 // stokis submit; gagal kirim TIDAK membatalkan opname yang sudah
 // diterapkan - hanya dicatat di email_error (pola sama dgn hotelFnb.routes.js
 // emailReport).
@@ -505,61 +502,11 @@ router.get('/opname/:id', async (req, res, next) => {
   }
 });
 
-// GET /api/inventory/opname/:id/signer-json
-// JSON siap-tempel ke halaman signer HOLDING. Berisi identitas sesi + tiap
-// item dengan angka sistem & hitungan stokis. Holding lah yang mengisi
-// "approved_qty" per item di halaman signer lalu menandatangani.
-router.get('/opname/:id/signer-json', async (req, res, next) => {
-  try {
-    const [[header]] = await pool.query(
-      `SELECT o.opname_id, o.status, o.item_count, o.note, o.created_at,
-              cu.full_name AS created_by_name
-         FROM web_stock_opname o
-         LEFT JOIN web_users cu ON cu.user_id = o.created_by_user_id
-        WHERE o.opname_id = ?`,
-      [req.params.id]
-    );
-    if (!header) throw new AppError(404, 'Sesi opname tidak ditemukan.');
-    const [items] = await pool.query(
-      `SELECT i.product_id, p.prod_desc AS product_name, i.qty_system_snapshot,
-              i.qty_physical, i.delta_snapshot, i.note,
-              COALESCE(s.qty_on_hand, 0) AS qty_current
-         FROM web_stock_opname_item i
-         LEFT JOIN m_product p ON CAST(p.prod_id AS CHAR) = i.product_id
-         LEFT JOIN web_product_stock s ON s.product_id = i.product_id AND s.warehouse_id = ?
-        WHERE i.opname_id = ?
-        ORDER BY i.id`,
-      [WAREHOUSE_ID, req.params.id]
-    );
-    res.json({
-      kind: 'gr_pos_opname_for_signing',
-      opname_id: header.opname_id,
-      unit_id: UNIT_ID,
-      warehouse_id: WAREHOUSE_ID,
-      status: header.status,
-      submitted_by: header.created_by_name,
-      submitted_at: header.created_at,
-      note: header.note,
-      items: items.map((i) => ({
-        product_id: i.product_id,
-        product_name: i.product_name,
-        qty_system: Number(i.qty_system_snapshot),
-        qty_physical_stokis: Number(i.qty_physical),
-        qty_current: Number(i.qty_current),
-        stokis_note: i.note || null,
-        approved_qty: Number(i.qty_physical), // default = hitungan stokis; holding boleh ubah
-      })),
-    });
-  } catch (err) {
-    next(err);
-  }
-});
-
 // POST /api/inventory/opname  body: { note, items: [{ product_id, qty_physical, note }] }
 //
 // 2026-09-14: submit stokis LANGSUNG diterapkan ke stok (approval holding
-// dihapus - keputusan konsolidasi user dgn bagian gudang, lihat catatan
-// panjang di config/opname.js). Delta per produk dihitung ULANG dari
+// dihapus - keputusan konsolidasi user dgn bagian gudang, lihat migration
+// 020). Delta per produk dihitung ULANG dari
 // qty_on_hand SAAT INI oleh stock.applyOpnameItem (row locking FOR UPDATE
 // di sana) - bukan snapshot yang dibaca sebelum transaction dibuka, jadi
 // tetap aman kalau ada penjualan nyelip di antaranya.
@@ -678,14 +625,10 @@ router.post('/opname', requireRole(...OPNAME_SUBMIT_ROLES), async (req, res, nex
 // POST /api/inventory/opname/:id/apply
 // Eksekusi sesi PENDING: tulis delta SEBENARNYA (dihitung ulang dari stok
 // saat ini, lihat stock.service.applyOpnameItem) ke web_product_stock +
-// web_stock_movement (reason 'stock_opname'), yang otomatis ikut naik ke
-// pusat lewat jalur outbox 'stock_movement' yang sudah ada. Khusus
+// web_stock_movement (reason 'stock_opname'). Khusus
 // admin/supervisor - lihat catatan wewenang di 014_stock_opname.sql.
 router.post('/opname/:id/apply', requireRole(...OPNAME_APPLY_ROLES), async (req, res, next) => {
   try {
-    if (!OPNAME_LOCAL_APPLY) {
-      throw new AppError(403, 'Terapkan opname secara lokal DIMATIKAN. Opname hanya bisa diterapkan lewat impor file persetujuan holding (POST /opname/:id/import-approval).');
-    }
     const opnameId = req.params.id;
 
     // Header dikunci FOR UPDATE di DALAM transaction yang sama dgn eksekusi
@@ -740,9 +683,6 @@ router.post('/opname/:id/apply', requireRole(...OPNAME_APPLY_ROLES), async (req,
 // salah / mau diulang). Khusus admin/supervisor.
 router.post('/opname/:id/reject', requireRole(...OPNAME_APPLY_ROLES), async (req, res, next) => {
   try {
-    if (!OPNAME_LOCAL_APPLY) {
-      throw new AppError(403, 'Tolak opname secara lokal DIMATIKAN. Keputusan (approve/reject) datang dari file persetujuan holding.');
-    }
     const opnameId = req.params.id;
     const { note } = req.body || {};
 
@@ -760,28 +700,6 @@ router.post('/opname/:id/reject', requireRole(...OPNAME_APPLY_ROLES), async (req
       );
     });
     res.json({ opname_id: opnameId, status: 'rejected' });
-  } catch (err) {
-    next(err);
-  }
-});
-
-// POST /api/inventory/opname/:id/import-approval   body: { blob }
-// Impor FILE PERSETUJUAN HOLDING (blob bertanda tangan ECDSA P-256).
-// OTORITAS = tanda tangan holding, BUKAN role user yang mengunggah - jadi
-// stokis/admin/supervisor unit boleh mengunggah (mereka tak bisa memalsukan).
-// - Verifikasi tanda tangan thd OPNAME_APPLY_PUBKEY.
-// - Cek opname_id / unit_id / status 'pending' / nonce belum dipakai.
-// - decision 'approved' -> tulis delta (qty_disetujui holding vs stok terkini)
-//   ke web_stock_movement (reason 'stock_opname'); 'rejected' -> tandai rejected.
-router.post('/opname/:id/import-approval', requireRole(...OPNAME_SUBMIT_ROLES), async (req, res, next) => {
-  try {
-    const result = await opnameApproval.applyApprovalBlob({
-      opnameId: req.params.id,
-      blob: req.body && req.body.blob,
-      actorUserId: req.user.user_id,
-      terminalId: req.terminalId,
-    });
-    res.json(result);
   } catch (err) {
     next(err);
   }

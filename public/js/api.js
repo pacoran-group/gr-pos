@@ -180,9 +180,6 @@ const Api = {
   // Stock Opname dua-tahap (submit stokis -> apply admin/supervisor).
   listOpname: (status) => apiFetch('/api/inventory/opname' + (status ? '?status=' + status : '')),
   getOpname: (id) => apiFetch(`/api/inventory/opname/${encodeURIComponent(id)}`),
-  getOpnameSignerJson: (id) => apiFetch(`/api/inventory/opname/${encodeURIComponent(id)}/signer-json`),
-  importOpnameApproval: (id, blob) =>
-    apiFetch(`/api/inventory/opname/${encodeURIComponent(id)}/import-approval`, { method: 'POST', body: JSON.stringify({ blob }) }),
   submitOpname: (body) => apiFetch('/api/inventory/opname', { method: 'POST', body: JSON.stringify(body) }),
   applyOpname: (id) => apiFetch(`/api/inventory/opname/${encodeURIComponent(id)}/apply`, { method: 'POST' }),
   rejectOpname: (id, body) =>

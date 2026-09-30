@@ -1,7 +1,7 @@
 /**
  * Pengeluaran unit - CRUD sederhana. Lihat migration 013_expense.sql.
  *
- * Menggantikan alur "scan QR -> form n8n". Menangkap TOTAL pengeluaran
+ * Menangkap TOTAL pengeluaran
  * level-header (tanggal, vendor, unit bisnis, unit beban, total, catatan,
  * link bukti kuitansi). Tidak ada rincian per-item di sini.
  *
