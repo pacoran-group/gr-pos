@@ -116,6 +116,21 @@ async function checkWebTables(dbName) {
     }
   }
   if (!FATAL.length) ok('Semua tabel web_* penting (migration 001-023) ditemukan.');
+
+  // Migration 024 hanya mengubah ENUM (tak ada tabel baru), jadi dicek
+  // terpisah. Tanpa 024, void/batal item yang SUDAH DIBAYAR gagal total.
+  if (await tableExists(dbName, 'web_print_log')) {
+    const [[col]] = await pool.query(
+      `SELECT COLUMN_TYPE AS t FROM information_schema.columns
+        WHERE table_schema = ? AND table_name = 'web_print_log' AND column_name = 'print_type'`,
+      [dbName]
+    );
+    if (col && !String(col.t).includes("'slip_refund'")) {
+      fatal('Migration 024 (refund saat void/batal) belum dijalankan - void/batal item yang sudah dibayar akan GAGAL. Jalankan server/migrations/024_refund_slip.sql.');
+    } else if (col) {
+      ok('Migration 024 (slip refund) sudah terpasang.');
+    }
+  }
 }
 
 async function checkMasterTables(dbName) {

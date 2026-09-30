@@ -93,6 +93,7 @@
           <div class="k-card"><div class="k">Tunai</div><div class="v">${rp(c.cash_sales)}</div></div>
           <div class="k-card"><div class="k">Non-tunai</div><div class="v">${rp(c.non_cash)}</div></div>
           <div class="k-card"><div class="k">Kamar dibuka / ditutup</div><div class="v">${t.rooms_opened} / ${t.rooms_closed}</div></div>
+          ${r.by_kind && r.by_kind.refund ? `<div class="k-card"><div class="k">Refund ke tamu (sudah dipotong)</div><div class="v" style="color:var(--red)">${rp(-r.by_kind.refund)}</div></div>` : ''}
         </div>
         <div style="overflow-x:auto"><table class="summary-table">
           <thead><tr><th>Metode</th><th class="num">Jml</th><th class="num">Nilai</th></tr></thead>

@@ -293,11 +293,19 @@
     document.getElementById('btnBatal').addEventListener('click', async () => {
       if (!confirm('Batalkan transaksi ini? (khusus admin/supervisor)')) return;
       try {
-        await Api.batalTrans(transId);
-        showMsg('Transaksi dibatalkan.', 'success');
-        setTimeout(() => (window.location.href = '/dashboard.html'), 800);
+        const res = await Api.batalTrans(transId);
+        await printJobsSafely(res.print_jobs);
+        const refunds = res.refunds || [];
+        showMsg(refunds.length
+          ? `Transaksi dibatalkan. KEMBALIKAN ke tamu: ${refunds.map((r) => `${rupiah(r.amount)} (${refundMethodLabel(r.method)})`).join(' + ')}.`
+          : 'Transaksi dibatalkan.', 'success');
+        setTimeout(() => (window.location.href = '/dashboard.html'), refunds.length ? 4000 : 800);
       } catch (err) { showMsg(err.message, 'error'); }
     });
+
+    function refundMethodLabel(m) {
+      return { cash: 'tunai', qris: 'QRIS', card: 'kartu' }[m] || m;
+    }
 
     function showMsg(text, type) {
       const el = document.getElementById('actionMsg');
@@ -579,7 +587,9 @@
           }, newRequestKey());
           closeModal();
           await printJobsSafely(res.print_jobs);
-          showToast('Item di-void & slip retur dicetak.');
+          showToast(res.refund
+            ? `Item di-void. KEMBALIKAN ${rupiah(res.refund.amount)} (${refundMethodLabel(res.refund.method)}) ke tamu - slip refund dicetak.`
+            : 'Item di-void & slip retur dicetak.');
           await load();
         } catch (err) {
           errEl.textContent = err.message;
@@ -668,7 +678,9 @@
           }, newRequestKey());
           closeModal();
           await printJobsSafely(res.print_jobs);
-          showToast('Tukar item berhasil.');
+          showToast(res.refund
+            ? `Tukar item berhasil. KEMBALIKAN selisih ${rupiah(res.refund.amount)} (${refundMethodLabel(res.refund.method)}) ke tamu.`
+            : 'Tukar item berhasil.');
           if (res.threshold_warning) showToast(res.threshold_warning, 'error');
           showStockWarn(res.stock_warnings);
           await load();

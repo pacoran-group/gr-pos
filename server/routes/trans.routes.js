@@ -60,11 +60,13 @@ const TEST_MODE_ROLES = ['kasir', 'waiter', 'supervisor', 'head_unit', 'head_kar
 // Buka kamar TANPA memenuhi threshold F&B, dengan alokasi waktu MANUAL
 // (comp_hours). Beda dari Mode Test: sesi ini NYATA - player 154 nyala,
 // struk & tiket tercetak, stok bergerak, tagihan akhir menagih konsumsi asli.
-// Wajib otorisasi admin/supervisor (verifyApprover, sama seperti Void).
+// Wajib login admin/supervisor/head (sama seperti Void).
 // VVIP = comp_hours default (COMP_DEFAULT_HOURS); VIP = kasir isi jamnya.
 // Keduanya bisa diperpanjang lewat "+ Add Time".
 // =====================================================================
 const COMP_MAX_HOURS = 24;
+
+const PAYMENT_METHODS = ['cash', 'qris', 'card'];
 
 // id shift kasir yang sedang buka utk user ini (utk menandai pembayaran).
 // Kalau SHIFT_REQUIRED='on' dan tak ada shift buka -> tolak.
@@ -229,10 +231,14 @@ router.post('/buka-kamar', async (req, res, next) => {
     const {
       room_id, cust_name, person, waiter_id, member_id, items,
       initial_paid_amount, initial_payment_method, request_key, is_test,
-      rate_mode, comp_hours, comp_reason, approver_username, approver_password,
+      rate_mode, comp_hours, comp_reason,
       id_card_shown,
     } = req.body;
     if (!room_id) throw new AppError(400, 'room_id wajib diisi.');
+    const bukaMethod = initial_payment_method || 'cash';
+    if (!PAYMENT_METHODS.includes(bukaMethod)) {
+      throw new AppError(400, `Metode bayar '${initial_payment_method}' tidak dikenal (pilih: ${PAYMENT_METHODS.join('/')}).`);
+    }
     // Fallback kalau client lama/lupa kirim request_key: generate acak di server
     // - tidak memberi proteksi idempotency (tidak ada nilai utk dicocokkan di
     // retry berikutnya), tapi tidak memblokir alur (lihat getIdempotentResponse).
@@ -366,16 +372,15 @@ router.post('/buka-kamar', async (req, res, next) => {
       // yang ditanggung - hanya GATE-nya yang dilewati di bawah.
       const thresholdAmount = isTest ? 0 : await getThresholdAmount(conn, room.room_type, window);
 
-      // COMP (VIP/Komplimen): butuh peran admin/supervisor. Kalau yang LOGIN
-      // sudah admin/supervisor -> pakai identitas sesinya, tak perlu ketik
-      // ulang password (UI baru: tombol "Buka VIP" hanya muncul di komputer
-      // admin). Peran lain -> tetap wajib kredensial approver (kompat lama).
+      // COMP (VIP/Komplimen): hanya login admin/supervisor/head (tombol "Buka
+      // VIP" pun cuma muncul di komputer admin). Identitas sesi = approver.
       let compApprover = null;
       let compHours = null;
       if (isComp) {
-        compApprover = VOID_APPROVER_ROLES.includes(req.user.role)
-          ? { user_id: req.user.user_id, full_name: req.user.full_name || req.user.username, role: req.user.role }
-          : await verifyApprover(conn, approver_username, approver_password);
+        if (!VOID_APPROVER_ROLES.includes(req.user.role)) {
+          throw new AppError(403, 'Buka VIP / komplimen hanya bisa lewat login admin atau supervisor.');
+        }
+        compApprover = { user_id: req.user.user_id, full_name: req.user.full_name || req.user.username, role: req.user.role };
         const raw = comp_hours === undefined || comp_hours === null || comp_hours === ''
           ? COMP_DEFAULT_HOURS
           : Number(comp_hours);
@@ -419,7 +424,7 @@ router.post('/buka-kamar', async (req, res, next) => {
         [
           transId, room_id, room.room_type, cust_name || 'MR. GUEST', Number(person) || 0,
           waiter_id || null, member_id || null, memberDiscRoom, memberDiscFnb, promoDiscFnb, paidAmount,
-          initial_payment_method || 'cash', window, thresholdAmount, serviceChargePct, billingMode, restoTaxPct, isTest ? 1 : 0,
+          bukaMethod, window, thresholdAmount, serviceChargePct, billingMode, restoTaxPct, isTest ? 1 : 0,
           isComp ? 'comp' : 'threshold', compHours, isComp ? (comp_reason || null) : null,
           compApprover ? compApprover.user_id : null,
           req.user.user_id, req.terminalId,
@@ -433,7 +438,7 @@ router.post('/buka-kamar', async (req, res, next) => {
         `INSERT INTO web_tr_trans_payments
            (trans_id, shift_id, kind, amount, method, paid_by_user_id, paid_at_terminal, note)
          VALUES (?, ?, 'buka', ?, ?, ?, ?, ?)`,
-        [transId, bukaShiftId, paidAmount, initial_payment_method || 'cash', req.user.user_id, req.terminalId, 'order pembukaan']
+        [transId, bukaShiftId, paidAmount, bukaMethod, req.user.user_id, req.terminalId, 'order pembukaan']
       );
       const bukaPaymentId = bukaPay.insertId;
 
@@ -542,7 +547,7 @@ router.post('/buka-kamar', async (req, res, next) => {
             grand_total: billPreview.grand_total,
             paid_amount: paidAmount,
             paid_lunas: paidAmount >= billPreview.grand_total,
-            payment_method: initial_payment_method || 'cash',
+            payment_method: bukaMethod,
             rate_mode: isComp ? 'comp' : 'threshold',
             comp_note: isComp ? `VIP/VVIP - tanpa minimum F&B - alokasi ${compHours} jam` : null,
           },
@@ -612,7 +617,6 @@ const VOID_APPROVER_ROLES = ['supervisor', 'head_unit', 'head_karaoke', 'admin']
 /**
  * Aktor void = user yang sedang login, WAJIB admin. Tidak ada verifikasi
  * password terpisah: kalau sudah bisa login admin, dia berwenang.
- * Bentuk kembaliannya sama dgn verifyApprover lama (dipakai voidOneLine).
  */
 function requireAdminActor(req) {
   if (!req.user || req.user.role !== 'admin') {
@@ -735,7 +739,106 @@ async function voidOneLine(conn, trans, { detail_id, void_qty, reason }, approve
     product_name: row.product_name_snapshot,
     void_qty: vq,
     subtotal_voided: subtotalVoided,
+    payment_id: row.payment_id,
   };
+}
+
+// =====================================================================
+// REFUND (migration 024). Bayar-per-order membuat item sudah lunas sebelum
+// dikonsumsi, jadi void / tukar / batal atas item yang SUDAH DIBAYAR berarti
+// kasir mengembalikan uang ke tamu. Refund dicatat sbg baris
+// web_tr_trans_payments kind='refund' dgn amount NEGATIF supaya semua
+// SUM(amount) - kas seharusnya di Tutup Kasir, paid_total, auto-close shift
+// di Tutup Hari - otomatis benar (setoran kasir tidak tampak minus).
+//
+// Shift yang menanggung refund = laci tempat uang itu keluar:
+//   1. shift pembayaran asal, kalau masih buka;
+//   2. shift yang sedang buka milik kasir penerima pembayaran asal;
+//   3. shift yang sedang buka milik user yang melakukan void/batal;
+//   4. NULL (tidak ada shift buka - tetap tercatat di transaksi).
+// =====================================================================
+async function resolveRefundShiftId(conn, sourcePayment, req) {
+  if (sourcePayment && sourcePayment.shift_id) {
+    const [[s]] = await conn.query('SELECT status FROM web_cashier_shift WHERE id = ?', [sourcePayment.shift_id]);
+    if (s && s.status === 'open') return sourcePayment.shift_id;
+  }
+  if (sourcePayment) {
+    const sid = await getOpenShiftId(conn, sourcePayment.paid_by_user_id);
+    if (sid != null) return sid;
+  }
+  return getOpenShiftId(conn, req.user.user_id);
+}
+
+/** Catat 1 baris refund (amount negatif) + antre slip refund. */
+async function recordRefund(conn, trans, { amount, sourcePayment, reason, approvedBy, note }, req) {
+  const method = sourcePayment ? sourcePayment.method : 'cash';
+  const shiftId = await resolveRefundShiftId(conn, sourcePayment, req);
+  const [ins] = await conn.query(
+    `INSERT INTO web_tr_trans_payments
+       (trans_id, shift_id, kind, amount, method, paid_by_user_id, paid_at_terminal, note)
+     VALUES (?, ?, 'refund', ?, ?, ?, ?, ?)`,
+    [trans.trans_id, shiftId, -amount, method, req.user.user_id, req.terminalId, note]
+  );
+  const refund = { payment_id: ins.insertId, amount, method, shift_id: shiftId };
+  await conn.query(
+    `INSERT INTO web_tr_trans_history (trans_id, action, user_id, terminal_id, detail)
+     VALUES (?, 'bayar_order', ?, ?, ?)`,
+    [trans.trans_id, req.user.user_id, req.terminalId, JSON.stringify({ kind: 'refund', ...refund, reason: reason || null })]
+  );
+  const [rRows] = await conn.query('SELECT room_name FROM m_room WHERE room_id = ?', [trans.room_id]);
+  await queuePrint(conn, {
+    transId: trans.trans_id,
+    printType: 'slip_refund',
+    printerTarget: 'thermal',
+    destination: 'local_qz',
+    payload: {
+      outlet_name: UNIT_NAME,
+      trans_id: trans.trans_id,
+      room_name: rRows[0]?.room_name || `Room ${trans.room_id}`,
+      cust_name: trans.cust_name,
+      amount,
+      method,
+      reason: reason || null,
+      approved_by: approvedBy || null,
+      note,
+    },
+  });
+  return refund;
+}
+
+/**
+ * Setelah void / tukar item yang SUDAH DIBAYAR (`voided.payment_id` terisi):
+ * kembalikan uangnya ke tamu dgn metode pembayaran item itu. Item "masuk
+ * tagihan" (belum dibayar) tidak pernah menghasilkan refund - dan tidak ikut
+ * "memakan" refund item lain: dia tetap ditagih saat checkout.
+ *
+ * Jumlah = kelebihan bayar dihitung HANYA atas baris yang sudah dibayar
+ * (sudah termasuk item pengganti tukar, lihat exchange), dibatasi nilai item
+ * yang di-void - jadi diskon promo/member yang tadinya mengurangi uang
+ * diterima tidak ikut terkembalikan. Panggil SETELAH promo dihitung ulang.
+ */
+async function refundOverpayment(conn, transId, voided, { reason, approvedBy }, req) {
+  if (!voided.payment_id) return null;
+  const [[trans]] = await conn.query('SELECT * FROM web_tr_trans WHERE trans_id = ?', [transId]);
+  if (!trans || trans.is_test) return null;
+  const [paidDetails] = await conn.query(
+    'SELECT * FROM web_tr_trans_details WHERE trans_id = ? AND payment_id IS NOT NULL',
+    [transId]
+  );
+  const paidBill = computeBill(trans, paidDetails);
+  const [[paySum]] = await conn.query(
+    'SELECT COALESCE(SUM(amount), 0) AS t FROM web_tr_trans_payments WHERE trans_id = ?',
+    [transId]
+  );
+  const over = Math.round(Number(paySum.t) - Number(paidBill.grand_total));
+  const amount = Math.min(over, Math.round(Number(voided.subtotal_voided)));
+  if (!(amount > 0)) return null;
+
+  const [[src]] = await conn.query('SELECT * FROM web_tr_trans_payments WHERE id = ?', [voided.payment_id]);
+  return recordRefund(conn, trans, {
+    amount, sourcePayment: src || null, reason, approvedBy,
+    note: 'refund void/tukar item (sudah dibayar)',
+  }, req);
 }
 
 // =====================================================================
@@ -767,9 +870,11 @@ router.post('/:id/void-item', requireRole('admin'), async (req, res, next) => {
         ? { promo_disc_fnb: 0, applied: [] }
         : await promo.recomputeForTrans(conn, transId);
 
+      const refund = await refundOverpayment(conn, transId, voided, { reason, approvedBy: approver.full_name }, req);
+
       const printJobs = await fetchLocalPrintJobs(conn, transId);
       const response = {
-        trans_id: transId, voided, print_jobs: printJobs,
+        trans_id: transId, voided, refund, print_jobs: printJobs,
         promo_disc_fnb: promoRes.promo_disc_fnb, promos_applied: promoRes.applied,
       };
       await saveIdempotentResponse(conn, 'void_item', requestKey, transId, response);
@@ -813,12 +918,15 @@ router.post('/:id/exchange', requireRole('admin'), async (req, res, next) => {
       // 2) Tambah sisi baru (pola sama dgn POST /:id/tambah-order)
       const priced = await fetchItemsWithPrice(conn, add_items || []);
       if (!priced.length) throw new AppError(400, 'Tidak ada item pengganti yang ditambahkan.');
+      // Pengganti mewarisi status bayar item lama (payment_id): item lama
+      // yang sudah lunas "membayari" penggantinya; selisih lebih murah
+      // di-refund di bawah, selisih lebih mahal ditagih saat checkout.
       for (const item of priced) {
         await conn.query(
           `INSERT INTO web_tr_trans_details
-            (trans_id, product_id, product_name_snapshot, qty, price, subtotal, sc_tax_exempt, added_by_user_id, added_at_terminal)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          [transId, item.product_id, item.product_name_snapshot, item.qty, item.price, item.subtotal, item.sc_tax_exempt ? 1 : 0, req.user.user_id, req.terminalId]
+            (trans_id, product_id, product_name_snapshot, qty, price, subtotal, sc_tax_exempt, added_by_user_id, added_at_terminal, payment_id)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          [transId, item.product_id, item.product_name_snapshot, item.qty, item.price, item.subtotal, item.sc_tax_exempt ? 1 : 0, req.user.user_id, req.terminalId, voided.payment_id || null]
         );
       }
 
@@ -840,6 +948,11 @@ router.post('/:id/exchange', requireRole('admin'), async (req, res, next) => {
          VALUES (?, 'tambah_order', ?, ?, ?)`,
         [transId, req.user.user_id, req.terminalId, JSON.stringify({ items: priced, via: 'exchange', exchange_for: voided })]
       );
+
+      // Item pengganti "dibayar" dari nilai item lama; yang dikembalikan ke
+      // tamu hanya SELISIH-nya (kalau pengganti lebih murah). Pengganti yang
+      // lebih mahal -> kekurangannya ditagih saat checkout seperti biasa.
+      const refund = await refundOverpayment(conn, transId, voided, { reason, approvedBy: approver.full_name }, req);
 
       const [roomRows] = await conn.query('SELECT room_name FROM m_room WHERE room_id = ?', [trans.room_id]);
       const cookItems = priced.filter((i) => i.needs_cooking);
@@ -886,7 +999,7 @@ router.post('/:id/exchange', requireRole('admin'), async (req, res, next) => {
 
       const printJobs = await fetchLocalPrintJobs(conn, transId);
       const response = {
-        trans_id: transId, voided, added: priced, threshold_warning,
+        trans_id: transId, voided, added: priced, refund, threshold_warning,
         stock_warnings: stockWarnings, print_jobs: printJobs,
         promo_disc_fnb: promoRes.promo_disc_fnb, promos_applied: promoRes.applied,
       };
@@ -913,8 +1026,7 @@ router.post('/:id/tambah-order', async (req, res, next) => {
     const transId = req.params.id;
     const { items, paid_amount, payment_method, request_key } = req.body;
     const requestKey = request_key || crypto.randomUUID();
-    const validMethods = ['cash', 'qris', 'card'];
-    const method = validMethods.includes(payment_method) ? payment_method : 'cash';
+    const method = PAYMENT_METHODS.includes(payment_method) ? payment_method : 'cash';
 
     const result = await withTransaction(async (conn) => {
       const cachedTambahOrder = await getIdempotentResponse(conn, 'tambah_order', requestKey);
@@ -1171,8 +1283,7 @@ router.post('/:id/tutup-kamar', async (req, res, next) => {
   try {
     const transId = req.params.id;
     const { payment_method, request_key } = req.body || {};
-    const validMethods = ['cash', 'qris', 'card'];
-    const finalPaymentMethod = validMethods.includes(payment_method) ? payment_method : null;
+    const finalPaymentMethod = PAYMENT_METHODS.includes(payment_method) ? payment_method : null;
     const requestKey = request_key || crypto.randomUUID();
 
     const result = await withTransaction(async (conn) => {
@@ -1325,6 +1436,25 @@ router.post('/:id/batal', requireRole('admin', 'head_karaoke', 'head_unit', 'sup
         );
       }
 
+      // Uang yang sudah diterima dikembalikan seluruhnya, per metode bayar
+      // asalnya (tunai kembali tunai, QRIS/kartu di-reverse lewat EDC).
+      const refunds = [];
+      if (!trans.is_test) {
+        const [byMethod] = await conn.query(
+          `SELECT method, SUM(amount) AS net, MAX(CASE WHEN amount > 0 THEN id END) AS last_id
+             FROM web_tr_trans_payments WHERE trans_id = ? GROUP BY method HAVING SUM(amount) > 0`,
+          [transId]
+        );
+        const actor = req.user.full_name || req.user.username;
+        for (const m of byMethod) {
+          const [[src]] = await conn.query('SELECT * FROM web_tr_trans_payments WHERE id = ?', [m.last_id]);
+          refunds.push(await recordRefund(conn, trans, {
+            amount: Math.round(Number(m.net)), sourcePayment: src,
+            reason: 'transaksi dibatalkan', approvedBy: actor, note: 'refund batal transaksi',
+          }, req));
+        }
+      }
+
       // Matikan player - juga utk Mode Test (tes fisik menyalakannya).
       await roomPlayer.enqueue(conn, {
         roomId: trans.room_id, desiredState: 'off',
@@ -1333,10 +1463,11 @@ router.post('/:id/batal', requireRole('admin', 'head_karaoke', 'head_unit', 'sup
       });
       await conn.query(
         `INSERT INTO web_tr_trans_history (trans_id, action, user_id, terminal_id, detail)
-         VALUES (?, 'batal', ?, ?, '{}')`,
-        [transId, req.user.user_id, req.terminalId]
+         VALUES (?, 'batal', ?, ?, ?)`,
+        [transId, req.user.user_id, req.terminalId, JSON.stringify({ refunds })]
       );
-      return { trans_id: transId, status: 'cancelled' };
+      const printJobs = (await fetchLocalPrintJobs(conn, transId)).filter((j) => j.print_type === 'slip_refund');
+      return { trans_id: transId, status: 'cancelled', refunds, print_jobs: printJobs };
     });
     res.json(result);
   } catch (err) {

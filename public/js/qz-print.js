@@ -286,6 +286,33 @@ const QzPrint = (() => {
     return out;
   }
 
+  // Slip refund (migration 024): bukti uang keluar dari laci kasir ke tamu
+  // setelah void / tukar / batal item yang sudah dibayar. Disimpan di laci
+  // bersama uang shift - tamu tanda tangan sebagai bukti terima.
+  function formatSlipRefund(payload, width = 32) {
+    const METHOD_LABEL = { cash: 'TUNAI', qris: 'QRIS', card: 'KARTU' };
+    const out = [];
+    out.push(center(outletHeader(payload, 'GR POS'), width));
+    out.push(center('SLIP REFUND KE TAMU', width));
+    out.push(center(payload.room_name || '', width));
+    out.push(line(width));
+    if (payload.cust_name) out.push('Tamu   : ' + payload.cust_name);
+    out.push(twoCol('REFUND', rupiah(payload.amount), width));
+    out.push('Metode : ' + (METHOD_LABEL[payload.method] || String(payload.method || '-').toUpperCase()));
+    if (payload.method && payload.method !== 'cash') out.push('(reverse lewat EDC/QRIS)');
+    if (payload.reason) out.push('Alasan : ' + payload.reason);
+    if (payload.approved_by) out.push('Disetujui: ' + payload.approved_by);
+    out.push(line(width));
+    out.push('');
+    out.push('Tanda tangan tamu:');
+    out.push('');
+    out.push('');
+    out.push(line(width, '.'));
+    out.push('Trans: ' + payload.trans_id);
+    out.push(new Date().toLocaleString('id-ID'));
+    return out;
+  }
+
   // Slip arsip order F&B Hotel - dicetak di printer thermal kasir. Harga
   // menu = harga final (inklusif); komponen SC hanya rincian info.
   function formatSlipFnbHotel(payload, width = 32) {
@@ -393,11 +420,14 @@ const QzPrint = (() => {
       case 'slip_fnb_hotel':
         lines = formatSlipFnbHotel(job.payload);
         break;
+      case 'slip_refund':
+        lines = formatSlipRefund(job.payload);
+        break;
       default:
         throw new Error('Jenis struk tidak dikenal: ' + job.print_type);
     }
     await printRaw(job.printer_target, lines);
   }
 
-  return { printJob, ensureConnected, formatSlipGudang, formatBillingRoom, formatTagihanAkhir, formatStrukOrder, formatShiftClose, formatTiketDapur, formatSlipRetur, formatTiketDapurBatal, formatSlipFnbHotel };
+  return { printJob, ensureConnected, formatSlipGudang, formatBillingRoom, formatTagihanAkhir, formatStrukOrder, formatShiftClose, formatTiketDapur, formatSlipRetur, formatTiketDapurBatal, formatSlipFnbHotel, formatSlipRefund };
 })();
