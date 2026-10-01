@@ -75,6 +75,7 @@
     renderLayout({ active: 'reports', title: 'Laporan', subtitle: 'Tutup Hari' });
 
     const canClose = ['admin', 'head_karaoke', 'head_unit', 'supervisor'].includes((getUser() || {}).role);
+    const isAdminUser = ((getUser() || {}).role) === 'admin';
     const modalMount = document.getElementById('modalMount');
     function closeModal() { modalMount.innerHTML = ''; }
     modalMount.addEventListener('click', (e) => { if (e.target === modalMount.firstElementChild) closeModal(); });
@@ -331,7 +332,7 @@
         const el = document.getElementById('repHistory');
         if (!history.length) { el.innerHTML = '<p class="muted-note">Belum ada Tutup Hari tersimpan.</p>'; return; }
         el.innerHTML = `<table class="summary-table">
-          <thead><tr><th>Tanggal</th><th class="num">Versi</th><th>Dibuat</th><th class="num">Baris CSV</th><th>Email</th><th></th></tr></thead>
+          <thead><tr><th>Tanggal</th><th class="num">Versi</th><th>Dibuat</th><th class="num">Baris CSV</th><th>Email</th><th>ERPNext</th><th></th></tr></thead>
           <tbody>${history.map((h) => {
             const bd = String(h.business_date).slice(0, 10);
             const emailCell = h.email_error
@@ -343,10 +344,13 @@
               <td>${escHtml(String(h.generated_at))}${h.generated_by_name ? ' · ' + escHtml(h.generated_by_name) : ''}</td>
               <td class="num">${h.csv_row_count}</td>
               <td>${emailCell}</td>
+              <td>${erpCell(h)}</td>
               <td>
                 <button class="btn btn-outline" data-act="view" data-bd="${bd}" style="padding:4px 9px;font-size:11px">Lihat</button>
                 <button class="btn btn-outline" data-act="csv" data-bd="${bd}" style="padding:4px 9px;font-size:11px">CSV</button>
                 ${canClose ? `<button class="btn btn-outline" data-act="resend" data-bd="${bd}" style="padding:4px 9px;font-size:11px">Kirim Ulang</button>` : ''}
+                ${canClose ? `<button class="btn btn-outline" data-act="erp-preview" data-bd="${bd}" style="padding:4px 9px;font-size:11px">Pratinjau JE</button>` : ''}
+                ${isAdminUser ? `<button class="btn btn-outline" data-act="erp-send" data-bd="${bd}" style="padding:4px 9px;font-size:11px">Kirim ke ERP</button>` : ''}
               </td>
             </tr>`;
           }).join('')}</tbody></table>`;
@@ -359,6 +363,42 @@
       }
     }
 
+    // Status kirim Journal Entry ke ERPNext (migration 025).
+    function erpCell(h) {
+      const st = h.erp_status;
+      if (!st) return '<span class="muted-note">—</span>';
+      const label = { pending: 'menunggu', sent: 'terkirim', exists: 'sudah ada', skipped: 'dilewati', failed: 'GAGAL' }[st] || st;
+      const color = st === 'sent' || st === 'exists' ? 'var(--green)' : st === 'failed' ? 'var(--red)' : 'var(--text-faint)';
+      const doc = h.erp_doc ? ` · ${escHtml(h.erp_doc)}` : '';
+      const err = h.erp_error ? `<div style="font-size:10.5px;color:${st === 'failed' ? 'var(--red)' : 'var(--yellow)'}">${escHtml(h.erp_error).slice(0, 140)}</div>` : '';
+      return `<span style="color:${color}">${label}${doc}</span>${err}`;
+    }
+
+    function showErpPreview(bd, pv) {
+      const rpx = (n) => 'Rp' + Number(n || 0).toLocaleString('id-ID');
+      const wrap = document.createElement('div');
+      wrap.className = 'modal-overlay';
+      const rows = pv.skip ? '' : pv.payload.accounts.map((a) => `<tr><td>${escHtml(a.account)}</td>
+          <td class="num">${a.debit_in_account_currency ? rpx(a.debit_in_account_currency) : ''}</td>
+          <td class="num">${a.credit_in_account_currency ? rpx(a.credit_in_account_currency) : ''}</td></tr>`).join('');
+      wrap.innerHTML = `
+        <div class="modal-box" style="max-width:620px">
+          <h3>Pratinjau Journal Entry — ${escHtml(bd)}</h3>
+          <p class="muted">Belum dikirim. Sumber: ${escHtml(pv.source || '-')}. Ref: <code>${escHtml(pv.ref || '-')}</code></p>
+          ${pv.skip ? `<p>Tidak akan dikirim: ${escHtml(pv.reason)}</p>` : `
+          <div style="overflow-x:auto"><table class="summary-table">
+            <thead><tr><th>Akun</th><th class="num">Debit</th><th class="num">Kredit</th></tr></thead>
+            <tbody>${rows}<tr><td><b>Total</b></td><td class="num"><b>${rpx(pv.total)}</b></td><td class="num"><b>${rpx(pv.total)}</b></td></tr></tbody>
+          </table></div>
+          <p class="muted" style="margin-top:8px;font-size:12px">Keterangan: ${escHtml(pv.remark)}</p>`}
+          <button class="btn btn-outline btn-block" id="erpPvClose" style="margin-top:10px">Tutup</button>
+        </div>`;
+      document.body.appendChild(wrap);
+      const close = () => wrap.remove();
+      wrap.addEventListener('click', (e) => { if (e.target === wrap) close(); });
+      wrap.querySelector('#erpPvClose').addEventListener('click', close);
+    }
+
     async function histAction(act, bd, btn) {
       try {
         if (act === 'view') {
@@ -368,6 +408,15 @@
           document.getElementById('repActions').scrollIntoView({ behavior: 'smooth', block: 'center' });
         } else if (act === 'csv') {
           await Api.downloadDailyCsv(bd, true);
+        } else if (act === 'erp-preview') {
+          showErpPreview(bd, await Api.erpPreview(bd));
+        } else if (act === 'erp-send') {
+          if (!confirm(`Kirim Tutup Hari ${bd} ke ERPNext sebagai Journal Entry DRAFT?`)) return;
+          btn.disabled = true;
+          const res = await Api.erpSend(bd);
+          if (res.status === 'failed') showToast('Kirim ke ERP GAGAL: ' + (res.error || '-'), 'error');
+          else showToast(`ERPNext: ${res.status}${res.doc ? ' (' + res.doc + ')' : ''}${res.note ? ' - ' + res.note : ''}`, res.note ? 'error' : undefined);
+          await loadHistory();
         } else if (act === 'resend') {
           btn.disabled = true;
           const res = await Api.resendDailyClose(bd);

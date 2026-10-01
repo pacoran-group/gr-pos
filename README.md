@@ -447,6 +447,20 @@ Tidak ada worker yang mengirim data keluar - gr-pos berjalan sepenuhnya
 independen per unit (tidak ada data yang keluar dari database unit itu
 sendiri).
 
+### Integrasi ERPNext (migration 025)
+
+Kalau `ERPNEXT_SENDER_ENABLED=on`, setiap **Tutup Hari** dikirim ke ERPNext sebagai
+1 **Journal Entry draft** per hari (Accounting yang Submit). Kiriman gagal (ERP/internet
+mati) dicoba ulang otomatis tiap 5 menit; status per hari tampil di Reports → Riwayat
+(kolom ERPNext, tombol *Pratinjau JE* / *Kirim ke ERP*).
+
+- Kas didebit sebesar uang yang **dihitung kasir** (selisih Tutup Kasir ikut); kasir yang
+  kurang setor dicantumkan di keterangan JE.
+- QRIS & kartu dari tabel pembayaran sebenarnya (sudah dikurangi refund).
+- Anti-dobel lewat custom field Unique `custom_gr_pos_ref` di Journal Entry.
+- Cek koneksi & nama akun (read-only): `GET /api/erpnext/check` (login admin).
+- Spesifikasi lengkap: `INTEGRASI-ERPNEXT.md`.
+
 ## 11. Keamanan & catatan penting
 
 - Password user di-hash dengan bcrypt (tabel `web_users`).

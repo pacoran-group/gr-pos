@@ -251,6 +251,11 @@ const Api = {
   getStoredDailyClose: (businessDate) => apiFetch(`/api/reports/daily/${businessDate}`),
   resendDailyClose: (businessDate) =>
     apiFetch(`/api/reports/daily/${businessDate}/resend`, { method: 'POST' }),
+  // Integrasi ERPNext (Journal Entry draft per Tutup Hari, migration 025).
+  erpStatus: () => apiFetch('/api/erpnext/status'),
+  erpCheck: () => apiFetch('/api/erpnext/check'),
+  erpPreview: (businessDate) => apiFetch(`/api/erpnext/preview/${businessDate}`),
+  erpSend: (businessDate) => apiFetch(`/api/erpnext/send/${businessDate}`, { method: 'POST' }),
   // Unduh CSV lewat fetch manual (apiFetch selalu parse JSON) + trigger <a download>.
   downloadDailyCsv: async (date, stored = false) => {
     const path = stored

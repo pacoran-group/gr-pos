@@ -117,6 +117,8 @@ router.get('/daily/history', requireRole(...ADMIN), async (req, res, next) => {
               dc.csv_row_count,
               DATE_FORMAT(dc.emailed_at, '%Y-%m-%d %H:%i:%s')   AS emailed_at,
               dc.email_to, dc.email_error,
+              dc.erp_status, dc.erp_doc, dc.erp_error,
+              DATE_FORMAT(dc.erp_synced_at, '%Y-%m-%d %H:%i:%s') AS erp_synced_at,
               DATE_FORMAT(dc.created_at, '%Y-%m-%d %H:%i:%s')   AS created_at
          FROM web_daily_close dc
          LEFT JOIN web_users gu ON gu.user_id = dc.generated_by_user_id

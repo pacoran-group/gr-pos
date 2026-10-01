@@ -21,6 +21,7 @@ const syncRoutes = require('./routes/sync.routes');
 const expenseRoutes = require('./routes/expense.routes');
 const analyticsRoutes = require('./routes/analytics.routes');
 const cashierRoutes = require('./routes/cashier.routes');
+const erpnextRoutes = require('./routes/erpnext.routes');
 const { errorHandler } = require('./middleware/errorHandler');
 const { pool } = require('./config/db');
 const { legacyEnabled } = require('./config/legacyDb');
@@ -29,6 +30,7 @@ const masterSync = require('./services/masterSync.service');
 const legacyRoomState = require('./services/legacyRoomState.service');
 const eodScheduler = require('./services/eodScheduler');
 const testMode = require('./services/testMode.service');
+const erpnextSync = require('./services/erpnextSync.service');
 
 const app = express();
 
@@ -49,6 +51,7 @@ app.use('/api/sync', syncRoutes);
 app.use('/api/expenses', expenseRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/cashier', cashierRoutes);
+app.use('/api/erpnext', erpnextRoutes);
 
 // Frontend statis (login, dashboard, buka kamar, dll)
 app.use(express.static(path.join(__dirname, '..', 'public')));
@@ -92,6 +95,10 @@ const server = app.listen(PORT, () => {
 
   // Scheduler Tutup Hari otomatis (independen dari sync 154).
   eodScheduler.start(timers);
+
+  // Kirim Tutup Hari -> ERPNext (Journal Entry draft) + retry otomatis.
+  // Gate sendiri lewat ERPNEXT_SENDER_ENABLED.
+  erpnextSync.start(timers);
 
   // Auto-selesai sesi Mode Test (tes fisik room) yang lewat batas waktu ->
   // matikan player-nya. Jalan walau sync 154 off (enqueue lokal saja).

@@ -131,6 +131,17 @@ async function checkWebTables(dbName) {
       ok('Migration 024 (slip refund) sudah terpasang.');
     }
   }
+
+  // Migration 025 (status kirim ERPNext) - kolom baru di web_daily_close.
+  if (await tableExists(dbName, 'web_daily_close')) {
+    // FATAL walau sender off: riwayat Tutup Hari di Reports membaca kolom erp_*.
+    const has025 = await columnExists(dbName, 'web_daily_close', 'erp_status');
+    if (!has025) {
+      fatal('Migration 025 (integrasi ERPNext) belum dijalankan - halaman Reports (riwayat Tutup Hari) akan error. Jalankan server/migrations/025_erpnext_sync.sql.');
+    } else {
+      ok('Migration 025 (integrasi ERPNext) sudah terpasang.');
+    }
+  }
 }
 
 async function checkMasterTables(dbName) {

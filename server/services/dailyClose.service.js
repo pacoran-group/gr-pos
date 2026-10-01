@@ -19,6 +19,8 @@ const { pool, withTransaction } = require('../config/db');
 const { EOD_CUTOFF_HOUR } = require('../config/report');
 const { UNIT_ID, UNIT_NAME, SYNC_OUTBOX_ENABLED } = require('../config/unit');
 const { computeBill } = require('./bill');
+const { ERPNEXT_SENDER_ENABLED } = require('../config/erpnext');
+const erpnextSync = require('./erpnextSync.service');
 
 const pad = (n) => String(n).padStart(2, '0');
 const fmtLocal = (d) =>
@@ -323,6 +325,21 @@ async function computeReport(businessDateStr, conn = pool) {
     comp_value_total: comp.value,
   };
 
+  // Penerimaan SEBENARNYA per metode (tabel pembayaran, sudah dikurangi
+  // refund) utk transaksi selesai hari ini. Beda dgn payment_mix di bawah
+  // (perkiraan dari metode buka/pelunasan): order tambahan yg dibayar QRIS/
+  // kartu & refund ikut terhitung benar. Dipakai Journal Entry ERPNext.
+  const receipts_by_method = emptyMethodSplit();
+  if (txRows.length) {
+    const ids = txRows.map((t) => t.trans_id);
+    const [payRows] = await conn.query(
+      `SELECT method, COALESCE(SUM(amount), 0) AS amt FROM web_tr_trans_payments
+        WHERE trans_id IN (${ids.map(() => '?').join(',')}) GROUP BY method`,
+      ids
+    );
+    for (const pr of payRows) receipts_by_method[normMethod(pr.method)] += Number(pr.amt);
+  }
+
   const payment_mix = ['tunai', 'qris', 'kartu', 'lainnya'].map((m) => ({
     method: m,
     amount: paymentMix[m],
@@ -340,6 +357,7 @@ async function computeReport(businessDateStr, conn = pool) {
     transactions,
     payment_mix,
     payment_mix_total: collected_total,
+    receipts_by_method,
     by_cashier: [...byCashier.values()].sort((a, b) => b.grand_total - a.grand_total),
     by_room_type: [...byRoomType.values()].sort((a, b) => b.grand_total - a.grand_total),
     top_products: topRows.map((r) => ({
@@ -407,8 +425,25 @@ function fmtDT(v) {
  * web_sync_outbox (event daily_close, kalau SYNC_OUTBOX_ENABLED).
  * @returns {Promise<{row: object, report: object}>}
  */
+// Error MariaDB yang aman diulang utk Tutup Hari: 1020 = "Record has changed
+// since last read" (innodb_snapshot_isolation=ON; mis. worker ERPNext sedang
+// memperbarui status baris hari yang sama), 1213 = deadlock. Tutup Hari
+// idempoten (hitung ulang + upsert baris yang sama), jadi cukup diulang.
+const RETRYABLE_ERRNO = new Set([1020, 1213]);
+
 async function generateAndPersist(businessDateStr, userId) {
-  return withTransaction(async (conn) => {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await generateAndPersistOnce(businessDateStr, userId);
+    } catch (err) {
+      if (!RETRYABLE_ERRNO.has(err.errno) || attempt >= 3) throw err;
+      await new Promise((r) => setTimeout(r, 150 * attempt));
+    }
+  }
+}
+
+async function generateAndPersistOnce(businessDateStr, userId) {
+  const out = await withTransaction(async (conn) => {
     // Jaring pengaman: shift kasir yang masih 'open' padahal hari usaha sudah
     // ditutup -> auto-tutup dgn kas dihitung = kas seharusnya (selisih 0),
     // catatan "auto-close EOD". Kasir tetap sebaiknya tutup manual saat logout.
@@ -465,12 +500,28 @@ async function generateAndPersist(businessDateStr, userId) {
       );
     }
 
+    // Tandai utk dikirim ke ERPNext (migration 025). Tulis lokal saja - kirim
+    // ke jaringan dilakukan worker SETELAH commit (lihat kick() di bawah).
+    // Dibungkus try/catch: masalah ERP tidak boleh menggagalkan Tutup Hari.
+    if (ERPNEXT_SENDER_ENABLED) {
+      try {
+        await conn.query(
+          "UPDATE web_daily_close SET erp_status = 'pending', erp_attempts = 0 WHERE unit_id = ? AND business_date = ?",
+          [UNIT_ID, businessDateStr]
+        );
+      } catch (err) {
+        console.error('[erpnext] gagal menandai pending (migration 025 sudah dijalankan?):', err.message);
+      }
+    }
+
     const [[row]] = await conn.query(
       'SELECT * FROM web_daily_close WHERE unit_id = ? AND business_date = ?',
       [UNIT_ID, businessDateStr]
     );
     return { row, report };
   });
+  erpnextSync.kick();
+  return out;
 }
 
 // --- CSV (RFC4180) ---
