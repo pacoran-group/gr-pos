@@ -5,6 +5,8 @@
  * - GET  /api/erpnext/check               -> cek koneksi & master data di ERP (read-only)
  * - GET  /api/erpnext/preview/:date       -> payload Journal Entry (dry-run, tidak mengirim)
  * - POST /api/erpnext/send/:date          -> kirim / kirim ulang Tutup Hari tanggal itu
+ * - GET  /api/erpnext/expense/:id/preview -> payload JE 1 pengeluaran (dry-run)
+ * - POST /api/erpnext/expense/:id/send    -> kirim / kirim ulang 1 pengeluaran (shift harus sudah tutup)
  */
 const express = require('express');
 const { pool } = require('../config/db');
@@ -80,6 +82,32 @@ router.post('/send/:date', requireRole('admin'), async (req, res, next) => {
     const date = dateParam(req);
     const result = await erp.sendNow(date);
     if (!result) throw new AppError(404, `Belum ada Tutup Hari tersimpan untuk ${date}. Jalankan Tutup Hari dulu.`);
+    res.json(result);
+  } catch (err) {
+    next(err);
+  }
+});
+
+function idParam(req) {
+  const id = Number(req.params.id);
+  if (!Number.isInteger(id) || id <= 0) throw new AppError(400, 'ID pengeluaran tidak valid.');
+  return id;
+}
+
+router.get('/expense/:id/preview', requireRole(...ADMIN), async (req, res, next) => {
+  try {
+    const e = await erp.getExpense(idParam(req));
+    if (!e) throw new AppError(404, 'Pengeluaran tidak ditemukan.');
+    res.json({ shift_status: e.shift_status, ...erp.buildExpenseJournalEntry(e) });
+  } catch (err) {
+    next(err);
+  }
+});
+
+router.post('/expense/:id/send', requireRole('admin'), async (req, res, next) => {
+  try {
+    const result = await erp.sendExpenseNow(idParam(req));
+    if (!result) throw new AppError(404, 'Pengeluaran tidak ditemukan.');
     res.json(result);
   } catch (err) {
     next(err);

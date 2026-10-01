@@ -142,6 +142,18 @@ async function checkWebTables(dbName) {
       ok('Migration 025 (integrasi ERPNext) sudah terpasang.');
     }
   }
+
+  // Migration 026 (pengeluaran dari laci kasir) - Tutup Kasir & halaman
+  // Pengeluaran membaca web_expense.shift_id / web_expense_category.
+  if (await tableExists(dbName, 'web_expense')) {
+    const has026 = (await columnExists(dbName, 'web_expense', 'shift_id'))
+      && (await tableExists(dbName, 'web_expense_category'));
+    if (!has026) {
+      fatal('Migration 026 (pengeluaran dari laci kasir) belum dijalankan - Tutup Kasir & halaman Pengeluaran akan error. Jalankan server/migrations/026_expense_shift_erp.sql.');
+    } else {
+      ok('Migration 026 (pengeluaran dari laci kasir) sudah terpasang.');
+    }
+  }
 }
 
 async function checkMasterTables(dbName) {

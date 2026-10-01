@@ -458,7 +458,12 @@ async function generateAndPersistOnce(businessDateStr, userId) {
            FROM web_tr_trans_payments WHERE shift_id = ?`,
         [s.id]
       );
-      const expected = Number(s.opening_float || 0) + Number(cash.cash_sales || 0);
+      const [[exp]] = await conn.query(
+        'SELECT COALESCE(SUM(amount), 0) AS total FROM web_expense WHERE shift_id = ?',
+        [s.id]
+      );
+      // = rumus cashierShift.computeShiftTotals (modal + tunai - pengeluaran).
+      const expected = Number(s.opening_float || 0) + Number(cash.cash_sales || 0) - Number(exp.total || 0);
       await conn.query(
         `UPDATE web_cashier_shift
            SET status = 'closed', closed_at = NOW(), counted_cash = ?, expected_cash = ?,

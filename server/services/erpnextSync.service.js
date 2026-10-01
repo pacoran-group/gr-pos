@@ -213,15 +213,21 @@ async function buildJournalEntry(report) {
 
 /** Semua JE (termasuk yg di-cancel) utk referensi hari ini: `ref` & `ref#n`. */
 async function findJournalEntries(ref) {
-  const q = new URLSearchParams({
-    filters: JSON.stringify([[C.ERPNEXT_REF_FIELD, 'like', `${ref}%`]]),
-    fields: JSON.stringify(['name', 'docstatus', 'total_debit', C.ERPNEXT_REF_FIELD]),
-    limit_page_length: '50',
-  });
-  const res = await frappe('GET', `${resourcePath('Journal Entry')}?${q}`);
-  return ((res && res.data) || []).filter((d) => {
+  // Dua query (persis & '#n') - BUKAN like 'ref%': 'KRK-GR:EXP-1%' juga
+  // cocok dgn EXP-10..EXP-19 dst & bisa memotong hasil di limit.
+  const out = [];
+  for (const f of [[C.ERPNEXT_REF_FIELD, '=', ref], [C.ERPNEXT_REF_FIELD, 'like', `${ref}#%`]]) {
+    const q = new URLSearchParams({
+      filters: JSON.stringify([f]),
+      fields: JSON.stringify(['name', 'docstatus', 'total_debit', C.ERPNEXT_REF_FIELD]),
+      limit_page_length: '100',
+    });
+    const res = await frappe('GET', `${resourcePath('Journal Entry')}?${q}`);
+    out.push(...((res && res.data) || []));
+  }
+  return out.filter((d) => {
     const v = String(d[C.ERPNEXT_REF_FIELD] || '');
-    return v === ref || v.startsWith(`${ref}#`);
+    return v === ref || /^#\d+$/.test(v.slice(ref.length)) && v.startsWith(ref);
   });
 }
 
@@ -256,7 +262,12 @@ async function existsResult(ex, je) {
 async function sendReport(report) {
   const missing = C.missingConfig();
   if (missing.length) throw new Error(`Config ERPNext belum lengkap di .env: ${missing.join(', ')}`);
-  const je = await buildJournalEntry(report);
+  return sendJournalEntry(await buildJournalEntry(report));
+}
+
+/** Kirim 1 JE hasil build*: cek dobel via ref, kirim (akhiran #n kalau yang
+ *  lama sudah di-cancel), tangani balapan Unique. Tidak menyentuh DB. */
+async function sendJournalEntry(je) {
   if (je.skip) return { status: 'skipped', doc: null, note: je.reason };
 
   const all = await findJournalEntries(je.ref);
@@ -278,6 +289,114 @@ async function sendReport(report) {
     }
     throw err;
   }
+}
+
+// ---------------------------------------------------------------------
+// Pengeluaran (migration 026): 1 JE draft per pengeluaran
+// ---------------------------------------------------------------------
+const EXPENSE_SQL = `SELECT e.expense_id, DATE_FORMAT(e.expense_date, '%Y-%m-%d') AS expense_date,
+    DATE_FORMAT(e.business_date, '%Y-%m-%d') AS business_date, e.vendor_name, e.category,
+    c.label AS category_label, c.erp_account, e.amount, e.note, e.receipt_url, e.shift_id,
+    s.status AS shift_status, u.full_name AS created_by_name
+  FROM web_expense e
+  LEFT JOIN web_expense_category c ON c.code = e.category
+  LEFT JOIN web_cashier_shift s ON s.id = e.shift_id
+  LEFT JOIN web_users u ON u.user_id = e.created_by_user_id`;
+
+function expenseRef(id) {
+  return `${UNIT_ID}:EXP-${id}`;
+}
+
+/**
+ * Debit akun beban kategori / Kredit Kas Penjualan unit (tunai dari laci).
+ * posting_date = hari usaha saat dicatat (uang keluar dari laci hari itu),
+ * tanggal kuitansi masuk keterangan. Lihat migration 026.
+ */
+function buildExpenseJournalEntry(e) {
+  const ref = expenseRef(e.expense_id);
+  if (!e.category || !e.shift_id) return { skip: true, reason: 'pengeluaran lama (tanpa kategori/shift) - tidak dikirim', ref };
+  if (!e.erp_account) return { skip: true, reason: `kategori '${e.category}' belum dipetakan ke akun ERPNext`, ref };
+  const amount = r0(e.amount);
+  if (!(amount > 0)) return { skip: true, reason: 'nominal 0', ref };
+  const parts = [
+    `gr-pos:${ref}`,
+    `${e.category_label || e.category}: ${e.vendor_name}`,
+    `kuitansi ${e.expense_date}`,
+    `dicatat ${e.created_by_name || '-'} (shift #${e.shift_id})`,
+  ];
+  if (e.note) parts.push(e.note);
+  if (e.receipt_url) parts.push(e.receipt_url);
+  const line = (account, debit, credit) => ({
+    account, cost_center: C.ERPNEXT_COST_CENTER,
+    debit_in_account_currency: debit, credit_in_account_currency: credit,
+  });
+  const remark = parts.join(' | ');
+  return {
+    skip: false,
+    ref,
+    remark,
+    total: amount,
+    payload: {
+      doctype: 'Journal Entry',
+      voucher_type: 'Journal Entry',
+      company: C.ERPNEXT_COMPANY,
+      posting_date: e.business_date || e.expense_date,
+      user_remark: remark,
+      [C.ERPNEXT_REF_FIELD]: ref,
+      accounts: [line(e.erp_account, amount, 0), line(C.ERPNEXT_ACCOUNT_KAS, 0, amount)],
+    },
+  };
+}
+
+async function processExpense(e) {
+  try {
+    const missing = C.missingConfig();
+    if (missing.length) throw new Error(`Config ERPNext belum lengkap di .env: ${missing.join(', ')}`);
+    const out = await sendJournalEntry(buildExpenseJournalEntry(e));
+    await pool.query(
+      `UPDATE web_expense SET erp_status = ?, erp_doc = ?, erp_error = ?, erp_synced_at = NOW(), erp_attempts = erp_attempts + 1
+        WHERE expense_id = ?`,
+      [out.status, out.doc, out.note ? String(out.note).slice(0, 500) : null, e.expense_id]
+    );
+    console.log(`[erpnext] pengeluaran #${e.expense_id}: ${out.status}${out.doc ? ' ' + out.doc : ''}${out.note ? ' - ' + out.note : ''}`);
+    return { expense_id: e.expense_id, ...out };
+  } catch (err) {
+    await pool.query(
+      "UPDATE web_expense SET erp_status = 'failed', erp_error = ?, erp_attempts = erp_attempts + 1 WHERE expense_id = ?",
+      [String(err.message).slice(0, 500), e.expense_id]
+    );
+    console.error(`[erpnext] pengeluaran #${e.expense_id}: GAGAL - ${err.message}`);
+    return { expense_id: e.expense_id, status: 'failed', error: err.message };
+  }
+}
+
+/** Pengeluaran yang siap dikirim: shift sudah ditutup (terkunci). */
+async function pendingExpenses() {
+  const [rows] = await pool.query(
+    `${EXPENSE_SQL}
+      WHERE s.status = 'closed' AND e.category IS NOT NULL
+        AND (e.erp_status IS NULL OR e.erp_status = 'pending'
+             OR (e.erp_status = 'failed' AND e.erp_attempts < ? AND e.business_date >= CURDATE() - INTERVAL ? DAY))
+      ORDER BY e.expense_id`,
+    [MAX_ATTEMPTS, LOOKBACK_DAYS]
+  );
+  return rows;
+}
+
+async function getExpense(id) {
+  const [[row]] = await pool.query(`${EXPENSE_SQL} WHERE e.expense_id = ?`, [id]);
+  return row || null;
+}
+
+/** Kirim/kirim ulang 1 pengeluaran SEKARANG (admin). Hanya kalau shift tutup. */
+async function sendExpenseNow(id) {
+  const e = await getExpense(id);
+  if (!e) return null;
+  if (e.shift_status !== 'closed') {
+    return { expense_id: id, status: 'skipped', note: 'shift kasir belum ditutup - pengeluaran baru dikirim setelah Tutup Kasir' };
+  }
+  await pool.query("UPDATE web_expense SET erp_status = 'pending', erp_attempts = 0 WHERE expense_id = ?", [id]);
+  return processExpense(e);
 }
 
 // ---------------------------------------------------------------------
@@ -307,8 +426,10 @@ async function processRow(row) {
   }
 }
 
+let rerun = false;
 async function tick() {
-  if (!C.ERPNEXT_SENDER_ENABLED || running) return null;
+  if (!C.ERPNEXT_SENDER_ENABLED) return null;
+  if (running) { rerun = true; return null; } // kick saat sedang jalan -> ulang setelah selesai
   running = true;
   try {
     const [rows] = await pool.query(
@@ -321,6 +442,7 @@ async function tick() {
     );
     const results = [];
     for (const row of rows) results.push(await processRow(row));
+    for (const e of await pendingExpenses()) results.push(await processExpense(e));
     lastRun = { at: new Date().toISOString(), results };
     return lastRun;
   } catch (err) {
@@ -328,10 +450,11 @@ async function tick() {
     return null;
   } finally {
     running = false;
+    if (rerun) { rerun = false; setImmediate(() => { tick().catch(() => {}); }); }
   }
 }
 
-/** Dipanggil setelah Tutup Hari commit - kirim segera tanpa menunggu interval. */
+/** Dipanggil setelah Tutup Hari / Tutup Kasir commit - kirim segera tanpa menunggu interval. */
 function kick() {
   if (C.ERPNEXT_SENDER_ENABLED) setImmediate(() => { tick().catch(() => {}); });
 }
@@ -390,6 +513,13 @@ async function checkSetup() {
     ];
     if (C.ERPNEXT_ACCOUNT_QRIS) accs.push(['Akun QRIS', C.ERPNEXT_ACCOUNT_QRIS]);
     if (C.ERPNEXT_ACCOUNT_KARTU) accs.push(['Akun Kartu', C.ERPNEXT_ACCOUNT_KARTU]);
+    // Akun beban kategori pengeluaran (migration 026), 1x per akun unik.
+    try {
+      const [cats] = await pool.query('SELECT erp_account, GROUP_CONCAT(label SEPARATOR ", ") AS labels FROM web_expense_category WHERE active = 1 GROUP BY erp_account');
+      for (const c of cats) accs.push([`Akun pengeluaran (${c.labels})`, c.erp_account]);
+    } catch (e) {
+      checks.push({ what: 'Kategori pengeluaran', name: null, ok: false, error: 'migration 026 belum dijalankan' });
+    }
     for (const [what, acc] of accs) await add(what, acc, () => checkAccount(acc));
     await add('Baca Journal Entry (field ' + C.ERPNEXT_REF_FIELD + ')', 'list', () => findJournalEntries('cek-koneksi'));
   }
@@ -414,7 +544,11 @@ function start(timers) {
 module.exports = {
   remarkFor,
   refFor,
+  expenseRef,
   buildJournalEntry,
+  buildExpenseJournalEntry,
+  getExpense,
+  sendExpenseNow,
   sendReport,
   sendNow,
   checkSetup,

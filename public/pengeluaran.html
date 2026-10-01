@@ -26,13 +26,15 @@
 <body>
   <div id="shell"></div>
   <div id="pageContent">
-    <div id="expGate" style="display:none" class="card">Halaman ini khusus admin / supervisor.</div>
+    <div id="expGate" style="display:none" class="card">Halaman ini khusus kasir / admin / supervisor.</div>
 
     <div id="expMain" style="display:none">
       <div class="card">
         <h3 style="margin-top:0" id="formTitle">Input Pengeluaran</h3>
         <p class="muted-note" style="margin-top:-6px">
-          Catat total pengeluaran per kuitansi. Rincian per-item (OCR) diproses terpisah di sistem pusat.
+          Pengeluaran dibayar <b>tunai dari laci kasir</b> dan otomatis mengurangi "Kas seharusnya" di shift kasir yang
+          sedang buka. Bisa diedit/dihapus selama shift masih buka; setelah <b>Tutup Kasir</b> data terkunci dan dikirim
+          ke ERPNext.
         </p>
 
         <div class="exp-form-grid">
@@ -43,6 +45,10 @@
           <div>
             <label class="field-label" for="fVendor">Nama Vendor</label>
             <input class="field" type="text" id="fVendor" maxlength="150" placeholder="mis. Toko Sembako Jaya" />
+          </div>
+          <div>
+            <label class="field-label" for="fCategory">Kategori</label>
+            <select class="field" id="fCategory"><option value="">— pilih kategori —</option></select>
           </div>
           <div>
             <label class="field-label" for="fAmount">Total Pengeluaran (Rp)</label>
@@ -103,7 +109,10 @@
     // Folder bersama tempat staff mengunggah foto bukti transfer.
     const RECEIPT_FOLDER_URL = 'https://drive.google.com/drive/folders/1aSQogLpz1VO-zM8Z_bQN4cPGQV1N4FNA?usp=sharing';
 
-    const canManage = ['admin', 'head_karaoke', 'head_unit', 'supervisor'].includes((getUser() || {}).role);
+    const myRole = (getUser() || {}).role;
+    const canManage = ['admin', 'head_karaoke', 'head_unit', 'supervisor'].includes(myRole);
+    const canRecord = canManage || myRole === 'kasir';
+    const isAdminUser = myRole === 'admin';
     let editingId = null;
     let lastRows = [];
 
@@ -129,6 +138,7 @@
       document.getElementById('btnCancelEdit').style.display = 'none';
       document.getElementById('fDate').value = ymd(new Date());
       document.getElementById('fVendor').value = '';
+      document.getElementById('fCategory').value = '';
       document.getElementById('fAmount').value = '';
       document.getElementById('fReceipt').value = '';
       document.getElementById('fNote').value = '';
@@ -142,6 +152,7 @@
       document.getElementById('btnCancelEdit').style.display = 'inline-flex';
       document.getElementById('fDate').value = dOnly(row.expense_date);
       document.getElementById('fVendor').value = row.vendor_name || '';
+      document.getElementById('fCategory').value = row.category || '';
       document.getElementById('fAmount').value = Number(row.amount) || '';
       document.getElementById('fReceipt').value = row.receipt_url || '';
       document.getElementById('fNote').value = row.note || '';
@@ -153,6 +164,7 @@
       return {
         expense_date: document.getElementById('fDate').value,
         vendor_name: document.getElementById('fVendor').value.trim(),
+        category: document.getElementById('fCategory').value,
         amount: Number(document.getElementById('fAmount').value),
         note: document.getElementById('fNote').value.trim(),
         receipt_url: document.getElementById('fReceipt').value.trim(),
@@ -166,6 +178,7 @@
       const body = formBody();
       if (!body.expense_date) { errEl.textContent = 'Tanggal transaksi wajib diisi.'; errEl.style.display = 'block'; return; }
       if (!body.vendor_name) { errEl.textContent = 'Nama vendor wajib diisi.'; errEl.style.display = 'block'; return; }
+      if (!body.category) { errEl.textContent = 'Kategori wajib dipilih.'; errEl.style.display = 'block'; return; }
       if (!(body.amount > 0)) { errEl.textContent = 'Total pengeluaran harus lebih dari 0.'; errEl.style.display = 'block'; return; }
       btn.disabled = true;
       try {
@@ -219,15 +232,20 @@
         const bukti = r.receipt_url
           ? `<a class="exp-link" href="${escHtml(r.receipt_url)}" target="_blank" rel="noopener">buka</a>`
           : '<span class="muted-note">—</span>';
+        const editable = !r.locked_reason;
+        const sendable = isAdminUser && r.shift_id && r.shift_status === 'closed';
         return `<tr>
           <td>${escHtml(dOnly(r.expense_date))}</td>
-          <td>${escHtml(r.vendor_name)}</td>
+          <td>${escHtml(r.category_label || r.category || '—')}</td>
+          <td>${escHtml(r.vendor_name)}${canManage && r.created_by_name ? `<div class="muted-note">${escHtml(r.created_by_name)}</div>` : ''}</td>
           <td class="num">${rp(r.amount)}</td>
           <td>${escHtml(r.note || '')}</td>
           <td class="num">${bukti}</td>
+          <td>${statusCell(r)}</td>
           <td class="exp-actions" style="white-space:nowrap">
-            ${canManage ? `<button class="btn btn-outline" data-act="edit" data-id="${r.expense_id}">Edit</button>
+            ${editable ? `<button class="btn btn-outline" data-act="edit" data-id="${r.expense_id}">Edit</button>
             <button class="btn btn-outline" data-act="del" data-id="${r.expense_id}">Hapus</button>` : ''}
+            ${sendable ? `<button class="btn btn-outline" data-act="erp" data-id="${r.expense_id}">Kirim ke ERP</button>` : ''}
           </td>
         </tr>`;
       }).join('');
@@ -235,8 +253,8 @@
       document.getElementById('expWrap').innerHTML = `
         <table class="summary-table">
           <thead><tr>
-            <th>Tgl</th><th>Vendor</th>
-            <th class="num">Total</th><th>Catatan</th><th class="num">Bukti</th><th></th>
+            <th>Tgl kuitansi</th><th>Kategori</th><th>Vendor</th>
+            <th class="num">Total</th><th>Catatan</th><th class="num">Bukti</th><th>Status</th><th></th>
           </tr></thead>
           <tbody>${rows}</tbody>
         </table>`;
@@ -246,8 +264,35 @@
       });
     }
 
+    // Status: shift (buka = masih bisa diedit / tutup = terkunci) + kiriman ERPNext.
+    function statusCell(r) {
+      if (!r.shift_id) return '<span class="muted-note">data lama</span>';
+      if (r.shift_status === 'open') return `<span class="muted-note">shift #${r.shift_id} buka</span>`;
+      const erp = { sent: 'ERP: terkirim', exists: 'ERP: sudah ada', failed: 'ERP: GAGAL', skipped: 'ERP: dilewati', pending: 'ERP: menunggu' }[r.erp_status] || 'terkunci · belum ke ERP';
+      const color = r.erp_status === 'failed' ? 'var(--red)' : (r.erp_status === 'sent' || r.erp_status === 'exists') ? 'var(--green)' : 'var(--text-muted)';
+      const doc = r.erp_doc ? ` · ${escHtml(r.erp_doc)}` : '';
+      const err = r.erp_error ? `<div class="muted-note" style="color:var(--red)">${escHtml(r.erp_error).slice(0, 100)}</div>` : '';
+      return `<span style="color:${color};font-size:12px">🔒 ${erp}${doc}</span>${err}`;
+    }
+
+    async function loadCategories() {
+      const { categories } = await Api.expenseCategories();
+      document.getElementById('fCategory').innerHTML = '<option value="">— pilih kategori —</option>' +
+        categories.map((c) => `<option value="${escHtml(c.code)}">${escHtml(c.label)}</option>`).join('');
+    }
+
     let pendingDelete = null;
     async function rowAction(act, id, btn) {
+      if (act === 'erp') {
+        btn.disabled = true;
+        try {
+          const res = await Api.erpExpenseSend(id);
+          if (res.status === 'failed') showToast('Kirim ke ERP GAGAL: ' + (res.error || '-'), 'error');
+          else showToast(`ERPNext: ${res.status}${res.doc ? ' (' + res.doc + ')' : ''}${res.note ? ' - ' + res.note : ''}`, res.note ? 'error' : undefined);
+          await load();
+        } catch (err) { showToast(err.message, 'error'); btn.disabled = false; }
+        return;
+      }
       if (act === 'edit') {
         const row = lastRows.find((r) => r.expense_id === id);
         if (row) fillForm(row);
@@ -277,16 +322,17 @@
 
     function downloadCsv() {
       if (!lastRows.length) { showToast('Tidak ada data untuk diunduh.', 'error'); return; }
-      const cols = ['tanggal', 'vendor', 'total', 'catatan', 'link_bukti', 'dibuat_oleh'];
+      const cols = ['tanggal', 'kategori', 'vendor', 'total', 'catatan', 'link_bukti', 'dibuat_oleh', 'shift', 'erp_status', 'erp_doc'];
       const cell = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
       const lines = [cols.map(cell).join(',')];
       let total = 0;
       for (const r of lastRows) {
         total += Number(r.amount);
-        lines.push([dOnly(r.expense_date), r.vendor_name,
-          Number(r.amount), r.note || '', r.receipt_url || '', r.created_by_name || ''].map(cell).join(','));
+        lines.push([dOnly(r.expense_date), r.category_label || r.category || '', r.vendor_name,
+          Number(r.amount), r.note || '', r.receipt_url || '', r.created_by_name || '',
+          r.shift_id || '', r.erp_status || '', r.erp_doc || ''].map(cell).join(','));
       }
-      lines.push(['', '', 'TOTAL', total, '', ''].map(cell).join(','));
+      lines.push(['', '', 'TOTAL', total, '', '', '', '', '', ''].map(cell).join(','));
       const blob = new Blob([lines.join('\r\n') + '\r\n'], { type: 'text/csv;charset=utf-8' });
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
@@ -307,12 +353,13 @@
     }
 
     // --- init ---
-    if (!canManage) {
+    if (!canRecord) {
       gate();
     } else {
       document.getElementById('expMain').style.display = 'block';
       setDefaultRange();
       clearForm();
+      loadCategories().catch((err) => showToast('Gagal memuat kategori: ' + err.message, 'error'));
       renderReceiptQr();
       document.getElementById('btnSave').addEventListener('click', save);
       document.getElementById('btnCancelEdit').addEventListener('click', clearForm);

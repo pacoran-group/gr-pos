@@ -256,6 +256,9 @@ const Api = {
   erpCheck: () => apiFetch('/api/erpnext/check'),
   erpPreview: (businessDate) => apiFetch(`/api/erpnext/preview/${businessDate}`),
   erpSend: (businessDate) => apiFetch(`/api/erpnext/send/${businessDate}`, { method: 'POST' }),
+  expenseCategories: () => apiFetch('/api/expenses/categories'),
+  erpExpensePreview: (id) => apiFetch(`/api/erpnext/expense/${id}/preview`),
+  erpExpenseSend: (id) => apiFetch(`/api/erpnext/expense/${id}/send`, { method: 'POST' }),
   // Unduh CSV lewat fetch manual (apiFetch selalu parse JSON) + trigger <a download>.
   downloadDailyCsv: async (date, stored = false) => {
     const path = stored

@@ -101,7 +101,8 @@
         </table></div>
         <div class="k-cards" style="margin-top:10px">
           <div class="k-card"><div class="k">Modal Kasir</div><div class="v">${rp(c.opening_float)}</div></div>
-          <div class="k-card"><div class="k">Kas seharusnya (modal + tunai)</div><div class="v">${rp(c.expected_cash)}</div></div>
+          <div class="k-card"><div class="k">Pengeluaran dari laci (${c.expenses_count || 0})</div><div class="v">-${rp(c.expenses_total)}</div></div>
+          <div class="k-card"><div class="k">Kas seharusnya (modal + tunai − pengeluaran)</div><div class="v">${rp(c.expected_cash)}</div></div>
         </div>
         <p class="muted-note" style="margin-top:6px">"Kas seharusnya" cuma buat cocokkan uang FISIK di laci - BUKAN angka omset. Omset shift ini = "Total diterima" (${rp(t.collected)}) di atas, modal tidak ikut dihitung.</p>
         <hr style="border:none;border-top:1px solid var(--border-soft);margin:14px 0" />

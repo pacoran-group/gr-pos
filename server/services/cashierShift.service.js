@@ -6,11 +6,15 @@
  * selama shift terbuka ditandai shift_id (lihat trans.routes.js).
  *
  * Tutup Kasir: sistem hitung penjualan per metode + KAS SEHARUSNYA
- * (opening_float + penjualan tunai), kasir input KAS FISIK, sistem catat
- * SELISIH (+lebih / -kurang) + snapshot laporan.
+ * (opening_float + penjualan tunai - pengeluaran tunai shift ini, migration
+ * 026), kasir input KAS FISIK, sistem catat SELISIH (+lebih / -kurang) +
+ * snapshot laporan. Pengeluaran WAJIB ikut dikurangi: kalau tidak, uang yang
+ * dipakai belanja terbaca sbg "kasir kurang setor" DAN Kas di ERPNext
+ * terpotong dua kali (lewat Selisih + lewat JE pengeluaran).
  */
 const { pool } = require('../config/db');
 const { AppError } = require('../middleware/errorHandler');
+const erpnextSync = require('./erpnextSync.service');
 
 const METHODS = ['tunai', 'qris', 'kartu', 'lainnya'];
 function normMethod(v) {
@@ -101,9 +105,15 @@ async function computeShiftTotals(shiftId, conn = pool) {
     [shift.user_id, shift.opened_at, winEnd]
   );
 
+  const [[expRow]] = await conn.query(
+    'SELECT COALESCE(SUM(amount), 0) AS total, COUNT(*) AS n FROM web_expense WHERE shift_id = ?',
+    [shiftId]
+  );
+  const expenses_total = Number(expRow.total) || 0;
+
   const opening_float = Number(shift.opening_float) || 0;
   const cash_sales = byMethod.tunai.amount;
-  const expected_cash = opening_float + cash_sales; // v1: tanpa pengeluaran kas
+  const expected_cash = opening_float + cash_sales - expenses_total;
 
   return {
     shift: {
@@ -132,6 +142,8 @@ async function computeShiftTotals(shiftId, conn = pool) {
       opening_float,
       cash_sales,
       non_cash: byMethod.qris.amount + byMethod.kartu.amount + byMethod.lainnya.amount,
+      expenses_total,
+      expenses_count: Number(expRow.n) || 0,
       expected_cash,
       counted_cash: shift.counted_cash == null ? null : Number(shift.counted_cash),
       variance: shift.variance == null ? null : Number(shift.variance),
@@ -157,6 +169,8 @@ async function closeShift({ shiftId, countedCash, note, closedByUserId }) {
       JSON.stringify({ ...totals, cash: { ...totals.cash, counted_cash: counted, variance } }), shiftId]
   );
 
+  // Pengeluaran shift ini kini terkunci -> boleh dikirim ke ERPNext.
+  erpnextSync.kick();
   return computeShiftTotals(shiftId);
 }
 

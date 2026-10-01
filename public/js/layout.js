@@ -59,8 +59,8 @@ const NAV_ITEMS = [
   { key: 'products', label: 'Produk', href: '/products.html', i: 'tag' },
   { key: 'promo', label: 'Promo', href: '/promo.html', i: 'plus' },
   { key: 'inventory', label: 'Inventory', href: '/inventory.html', i: 'box' },
-  // Pengeluaran: form sederhana di gr-pos (migration 013). Halaman gate ke
-  // admin/supervisor.
+  // Pengeluaran: tunai dari laci kasir (migration 013 + 026) - kasir mencatat
+  // sendiri, memotong kas seharusnya shift-nya.
   { key: 'pengeluaran', label: 'Pengeluaran', href: '/pengeluaran.html', i: 'cash' },
   { key: 'kasir', label: 'Tutup Kasir', href: '/tutup-kasir.html', i: 'cash' },
   { key: 'reports', label: 'Reports', href: '/reports.html', i: 'chart' },
@@ -85,7 +85,7 @@ const ROLE_NAV = {
   gudang: ['inventory'],
   // 'orders' tetap di daftar BOLEH (dibuka lewat klik kamar) walau tidak
   // muncul di sidebar (hidden:true).
-  kasir: ['dashboard', 'orders', 'fnb-hotel', 'kasir'],
+  kasir: ['dashboard', 'orders', 'fnb-hotel', 'pengeluaran', 'kasir'],
   head_unit: ['dashboard', 'orders', 'fnb-hotel', 'products', 'promo', 'inventory',
     'pengeluaran', 'kasir', 'reports', 'laporan-void', 'settings'],
 };
@@ -273,6 +273,7 @@ function openShiftCloseModal(shiftId, report, onLogout) {
           <tr><td><b>Total diterima</b></td><td class="num"><b>${rp(t.collected)}</b></td></tr>
           <tr><td>Modal Kasir</td><td class="num">${rp(c.opening_float)}</td></tr>
           <tr><td>Penjualan tunai</td><td class="num">${rp(c.cash_sales)}</td></tr>
+          ${c.expenses_total ? `<tr><td>Pengeluaran dari laci (${c.expenses_count || 0})</td><td class="num">-${rp(c.expenses_total)}</td></tr>` : ''}
           <tr><td><b>Kas seharusnya</b></td><td class="num"><b>${rp(c.expected_cash)}</b></td></tr>
         </tbody>
       </table>

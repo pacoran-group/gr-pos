@@ -458,6 +458,11 @@ mati) dicoba ulang otomatis tiap 5 menit; status per hari tampil di Reports → 
   kurang setor dicantumkan di keterangan JE.
 - QRIS & kartu dari tabel pembayaran sebenarnya (sudah dikurangi refund).
 - Anti-dobel lewat custom field Unique `custom_gr_pos_ref` di Journal Entry.
+- **Pengeluaran** (migration 026): dibayar tunai dari **laci kasir** - kasir mencatat sendiri
+  (wajib shift buka + kategori), otomatis mengurangi *Kas seharusnya* di Tutup Kasir. Setelah
+  Tutup Kasir pengeluaran terkunci lalu dikirim sbg 1 JE draft per pengeluaran (Debit akun beban
+  kategori / Kredit Kas Penjualan unit, posting = hari shift). Pemetaan kategori → akun ERPNext di
+  tabel `web_expense_category`.
 - Cek koneksi & nama akun (read-only): `GET /api/erpnext/check` (login admin).
 - Spesifikasi lengkap: `INTEGRASI-ERPNEXT.md`.
 
